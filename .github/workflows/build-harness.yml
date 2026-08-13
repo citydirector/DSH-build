@@ -172,14 +172,30 @@ jobs:
             Copy-Item "node_modules\@standard-schema\spec" "portable\app\node_modules\@standard-schema\spec" -Recurse -Force
           }
 
-      # 复制 node 24 运行时（setup-node 装的）
+      # 体积优化：删 sourcemap + build 工具（编译/lint/打包器/hooks，运行时绝不 import）。
+      # typescript 被 dsh-typert-generator（编译期生成器）依赖，但运行时无 import，可删。
+      - name: Strip build tools and sourcemaps
+        shell: pwsh
+        run: |
+          $nm = "portable\app\node_modules"
+          Get-ChildItem $nm -Recurse -Filter "*.map" -File | Remove-Item -Force -ErrorAction SilentlyContinue
+          $buildTools = @(
+            'typescript','tsx','@esbuild','@rolldown','@oxlint','@oxlint-tsgolint',
+            'lefthook','lefthook-windows-x64','lightningcss','lightningcss-win32-x64-msvc',
+            '@babel','tsdown','vite','rollup','eslint','webpack','terser','prettier','oxc-resolver'
+          )
+          foreach ($t in $buildTools) {
+            $p = Join-Path $nm $t
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
+          }
+
+      # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
         shell: pwsh
         run: |
           $nodeExe = (Get-Command node).Source
-          $nodeDir = Split-Path $nodeExe
           New-Item -ItemType Directory -Force portable\node | Out-Null
-          Copy-Item "$nodeDir\*" portable\node -Recurse -Force
+          Copy-Item $nodeExe portable\node\node.exe -Force
 
       # 编译启动器 + 更新器（.NET Framework 4.8 自带 csc）
       - name: Compile launcher and updater
