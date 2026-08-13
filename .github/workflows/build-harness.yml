@@ -155,20 +155,18 @@ jobs:
             --config.link-workspace-packages=true `
             portable/app
 
-      # deploy 产物无 workspace symlink（hoisted 已复制真实文件）；registry 包内部
-      # symlink 由 Compress-Archive 自动 dereference，无需单独 materialize。
-      # 补 deploy 漏的 3 个包：cosmokit/schemastery（link:vendor override）+ cordis-plugin-group（peer 依赖）
-      - name: Patch missing packages
+      # deploy 会系统性漏掉 workspace 包之间的 peer 依赖（auto-install-peers 对
+      # deploy 无效）。patch-peers.mjs 遍历 workspace 全部 @deepseek-ai 包，把缺失的
+      # 补齐（复制 lib/ + package.json）。实测补 55 个包，--dump-default-config 全绿。
+      - name: Patch missing workspace packages
         shell: pwsh
         run: |
-          foreach ($pkg in @(@('cosmokit','cosmokit'), @('schemastery','schemastery'), @('group','cordis-plugin-group'))) {
-            $src = "vendor\$($pkg[0])"
-            $dst = "portable\app\node_modules\@deepseek-ai\$($pkg[1])"
-            New-Item -ItemType Directory -Force $dst | Out-Null
-            if (Test-Path "$src\lib") { Copy-Item "$src\lib" "$dst\lib" -Recurse -Force }
-            Copy-Item "$src\package.json" "$dst\package.json" -Force
-          }
-          # schemastery 依赖 @standard-schema/spec（registry 包），从 install 结果复制
+          node _build_repo\portable\patch-peers.mjs . portable\app\node_modules\@deepseek-ai
+
+      # schemastery 依赖 @standard-schema/spec（registry 包，非 workspace），从 install 结果复制
+      - name: Patch registry peer (standard-schema)
+        shell: pwsh
+        run: |
           if (Test-Path "node_modules\@standard-schema\spec") {
             New-Item -ItemType Directory -Force "portable\app\node_modules\@standard-schema" | Out-Null
             Copy-Item "node_modules\@standard-schema\spec" "portable\app\node_modules\@standard-schema\spec" -Recurse -Force
@@ -202,14 +200,14 @@ jobs:
         run: |
           Set-Content -Path portable\VERSION -Value "${{ needs.check.outputs.sha }}" -NoNewline
 
-      # 冒烟测试：用便携 node 跑 dsh --help
+      # 冒烟测试：用便携 node boot 完整插件树（--help 太弱，只打印帮助不加载插件）
       - name: Smoke test
         shell: pwsh
         run: |
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          & portable\node\node.exe portable\app\lib\bin.js --help
-          if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败" }
+          & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web
+          if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
 
       - name: Package portable zip
         shell: pwsh
