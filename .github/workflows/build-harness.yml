@@ -314,7 +314,8 @@ jobs:
           : > /tmp/failed.log
           for jid in $failed_jobs; do
             for i in 1 2 3 4 5; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$jid/logs" > /tmp/job.log 2>/dev/null || true
+              # gh api .../logs 返回 zip 二进制，这里用 gh run view --job 拉解压后的文本日志
+              gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --job "$jid" --log > /tmp/job.log 2>/dev/null || true
               if [ -s /tmp/job.log ]; then break; fi
               sleep 3
             done
