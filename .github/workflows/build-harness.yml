@@ -11,6 +11,12 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Force build even if upstream has no new commits"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -41,6 +47,12 @@ jobs:
           shortSha="${currentSha:0:7}"
           echo "sha=$currentSha" >> "$GITHUB_OUTPUT"
           echo "short_sha=$shortSha" >> "$GITHUB_OUTPUT"
+          # 手动触发时勾选 force 可强制构建（无视上游是否有新提交）
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "🔨 强制构建 (force=true)"
+            exit 0
+          fi
           apiUrl="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/dsh-master-latest"
           if body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" "$apiUrl" | jq -r .body)"; then
             lastSha="$(printf '%s' "$body" | sed 's/.*@//')"
