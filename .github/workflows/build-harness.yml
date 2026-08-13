@@ -165,6 +165,19 @@ jobs:
           Copy-Item apps\cli\package.json "$dst\package.json" -Force
           if (-not (Test-Path "$dst\lib\bin.js")) { throw "bin.js 未复制成功" }
 
+      # 诊断 dsh-app-boot
+      - name: Diagnose dsh-app-boot
+        shell: pwsh
+        run: |
+          Write-Host "=== install 后 node_modules/@deepseek-ai/dsh-app-boot ==="
+          $a = "node_modules\@deepseek-ai\dsh-app-boot"
+          if (Test-Path $a) { $i = Get-Item $a -Force; Write-Host "LinkType=$($i.LinkType) Attr=$($i.Attributes)"; Get-ChildItem $a -Force -ErrorAction SilentlyContinue | Select-Object -First 5 Name } else { Write-Host "不存在" }
+          Write-Host "=== stage 后 portable/app/node_modules/@deepseek-ai/dsh-app-boot ==="
+          $b = "portable\app\node_modules\@deepseek-ai\dsh-app-boot"
+          if (Test-Path $b) { $j = Get-Item $b -Force; Write-Host "LinkType=$($j.LinkType) Attr=$($j.Attributes)"; Write-Host "package.json=$(Test-Path "$b\package.json") lib/index.js=$(Test-Path "$b\lib\index.js")"; Get-ChildItem $b -Force -ErrorAction SilentlyContinue | Select-Object -First 8 Name } else { Write-Host "不存在" }
+          Write-Host "=== scope 下包数 ==="
+          (Get-ChildItem "portable\app\node_modules\@deepseek-ai" -Force -ErrorAction SilentlyContinue).Count
+
       # 复制 node 24 运行时（setup-node 装的）
       - name: Copy node runtime
         shell: pwsh
