@@ -223,7 +223,7 @@ jobs:
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
           $out = & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web 2>&1
-          $out | Out-File -FilePath "portable\_smoke.log" -Encoding utf8
+          $out | Out-File -FilePath "_smoke.log" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
 
       # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
@@ -232,7 +232,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-error
-          path: portable\_smoke.log
+          path: _smoke.log
           retention-days: 3
 
       - name: Package portable zip
