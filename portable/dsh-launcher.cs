@@ -14,7 +14,7 @@ class DshLauncher
     {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string nodeExe = Path.Combine(baseDir, "node", "node.exe");
-        string binJs = Path.Combine(baseDir, "app", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+        string binJs = Path.Combine(baseDir, "app", "lib", "bin.js");
         string dataDir = Path.Combine(baseDir, "data");
 
         if (!File.Exists(nodeExe))
