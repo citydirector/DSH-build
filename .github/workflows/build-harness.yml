@@ -307,11 +307,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 拉失败步骤的日志，重试等待日志 ready（portable 失败后日志有数秒延迟）
-          for i in 1 2 3 4 5 6 7 8; do
-            gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > /tmp/failed.log 2>/dev/null || true
-            if [ -s /tmp/failed.log ]; then break; fi
-            sleep 3
+          # --log-failed 在 run 未结束时返回空，改用 API 找 conclusion=failure 的 job 并拉其日志
+          failed_jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
+            --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
+          echo "失败 job: $failed_jobs"
+          : > /tmp/failed.log
+          for jid in $failed_jobs; do
+            for i in 1 2 3 4 5; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$jid/logs" > /tmp/job.log 2>/dev/null || true
+              if [ -s /tmp/job.log ]; then break; fi
+              sleep 3
+            done
+            cat /tmp/job.log >> /tmp/failed.log 2>/dev/null || true
           done
           echo "failed.log 行数: $(wc -l < /tmp/failed.log 2>/dev/null || echo 0)"
           grep -iE "error|cannot find|cannot resolve|not found|ERR_|throw|AggregateError|failed to" /tmp/failed.log \
