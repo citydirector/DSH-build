@@ -189,6 +189,14 @@ jobs:
             if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
           }
 
+      # deploy 漏掉 workspace 包的 registry 依赖（实测 cordis-plugin-hmr 的
+      # @babel/code-frame 没带上，HMR 插件运行时 import 它导致闪退）。
+      # patch-dep.mjs 从 root node_modules 递归补齐缺失依赖链。
+      - name: Patch runtime deps (deploy 漏的 registry 依赖)
+        shell: pwsh
+        run: |
+          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame
+
       # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
         shell: pwsh
@@ -222,9 +230,31 @@ jobs:
         run: |
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          $out = & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web 2>&1
-          $out | Out-File -FilePath "_smoke.log" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
+          # 真正 boot（web 模式）：import 全部插件，比 --dump-default-config 更严格，
+          # 能捕获 deploy 漏掉的 registry 依赖（如 cordis-plugin-hmr 的 @babel/code-frame）。
+          $outLog = "_smoke.log"
+          $errLog = "_smoke.err.log"
+          $p = Start-Process -FilePath "portable\node\node.exe" -ArgumentList "portable\app\lib\bin.js","web" -NoNewWindow -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+          $ok = $false
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+            Start-Sleep -Seconds 1
+            try {
+              $c = New-Object System.Net.Sockets.TcpClient
+              $ar = $c.BeginConnect("127.0.0.1", 3080, $null, $null)
+              if ($ar.AsyncWaitHandle.WaitOne(800)) { $c.EndConnect($ar); $c.Close(); $ok = $true; break }
+              $c.Close()
+            } catch {}
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          if (-not $ok) {
+            $merged = @()
+            if (Test-Path $outLog) { $merged += Get-Content $outLog }
+            if (Test-Path $errLog) { $merged += Get-Content $errLog }
+            $merged | Out-File -FilePath $outLog -Encoding utf8
+            throw "dsh 冒烟测试失败（未能成功 boot，疑似缺依赖）"
+          }
+          Write-Host "dsh 成功 boot（3080 监听）"
 
       # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
       - name: Upload smoke log on failure
