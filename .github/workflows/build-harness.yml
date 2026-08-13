@@ -144,15 +144,16 @@ jobs:
         shell: pwsh
         run: pnpm run build
 
-      # 官方验证过的 deploy 链：--prod + hoisted，消灭 symlink，便携目录可直接复制
+      # deploy：不夹 --prod（dsh 运行时插件在 devDependencies，靠 cordis 动态加载），
+      # 产物结构 = target 根直接是包文件(lib/bin.js) + node_modules，故 target 用 portable/app
       - name: Deploy portable runtime
         shell: pwsh
         run: |
-          pnpm --filter @deepseek-ai/dsh --prod deploy --legacy `
+          pnpm --filter @deepseek-ai/dsh deploy --legacy `
             --config.node-linker=hoisted `
             --config.link-workspace-packages=true `
             --config.auto-install-peers=false `
-            portable/node_modules
+            portable/app
 
       # 复制 node 24 运行时（setup-node 装的）
       - name: Copy node runtime
@@ -188,7 +189,7 @@ jobs:
         run: |
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          & portable\node\node.exe portable\node_modules\@deepseek-ai\dsh\lib\bin.js --help
+          & portable\node\node.exe portable\app\lib\bin.js --help
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败" }
 
       - name: Package portable zip
