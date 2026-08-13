@@ -222,15 +222,26 @@ jobs:
         run: |
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web
+          $out = & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web 2>&1
+          $out | Out-File -FilePath "portable\_smoke.log" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
 
       # 临时：验证失败通知链路（演练后删除）
       - name: Intentional failure (verify notify)
         shell: pwsh
         run: |
+          "模拟缺依赖：Cannot find package '@deepseek-ai/dsh-timeout' imported from dsh-llm" | Out-File -FilePath "portable\_smoke.log" -Encoding utf8 -Append
           Write-Error "模拟缺依赖：Cannot find package '@deepseek-ai/dsh-timeout' imported from dsh-llm"
           exit 1
+
+      # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
+      - name: Upload smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-error
+          path: portable\_smoke.log
+          retention-days: 3
 
       - name: Package portable zip
         shell: pwsh
@@ -303,43 +314,26 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     steps:
-      - name: Collect error summary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # --log-failed 在 run 未结束时返回空，改用 API 找 conclusion=failure 的 job 并拉其日志
-          failed_jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
-            --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
-          echo "失败 job: $failed_jobs"
-          : > /tmp/failed.log
-          for jid in $failed_jobs; do
-            # 日志归档有延迟（几十秒），轮询最多 3 分钟直到拉非空
-            for i in {1..36}; do
-              gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --job "$jid" --log > /tmp/job.log 2>/dev/null || true
-              if [ -s /tmp/job.log ]; then break; fi
-              sleep 5
-            done
-            cat /tmp/job.log >> /tmp/failed.log 2>/dev/null || true
-          done
-          echo "failed.log 行数: $(wc -l < /tmp/failed.log 2>/dev/null || echo 0)"
-          grep -iE "error|cannot find|cannot resolve|not found|ERR_|throw|AggregateError|failed to" /tmp/failed.log \
-            | grep -viE "DeprecationWarning|trace-deprecation|Node.js [0-9]+ is deprecated" \
-            | head -20 > /tmp/err.txt || true
-          # 写入 GITHUB_ENV（多行，供下一步 jq 使用）
-          {
-            echo "ERR_SUMMARY<<EOF"
-            cat /tmp/err.txt
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+      - name: Download smoke error artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-error
+          path: error-artifact
+        continue-on-error: true
 
       - name: Send failure notification
         env:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: |
+          # 从 artifact 读 smoke 错误（run 内拉不到日志，只能靠 artifact 传递）
+          err=""
+          if [ -s error-artifact/_smoke.log ]; then
+            err=$(grep -iE "error|cannot find|cannot resolve|not found|throw|ERR_" error-artifact/_smoke.log | head -20 || true)
+          fi
           jq -n \
             --arg sha "${{ needs.check.outputs.short_sha }}" \
-            --arg err "$ERR_SUMMARY" \
+            --arg err "$err" \
             --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{title:("DSH 构建失败 - "+$sha),desp:("❌ DSH 构建失败\n提交: "+$sha+"\n日志: "+$url+"\n\n--- 错误摘要 ---\n"+$err)}' \
             > /tmp/body.json
