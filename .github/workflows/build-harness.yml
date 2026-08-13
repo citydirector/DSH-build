@@ -226,14 +226,6 @@ jobs:
           $out | Out-File -FilePath "portable\_smoke.log" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
 
-      # 临时：验证失败通知链路（演练后删除）
-      - name: Intentional failure (verify notify)
-        shell: pwsh
-        run: |
-          "模拟缺依赖：Cannot find package '@deepseek-ai/dsh-timeout' imported from dsh-llm" | Out-File -FilePath "portable\_smoke.log" -Encoding utf8 -Append
-          Write-Error "模拟缺依赖：Cannot find package '@deepseek-ai/dsh-timeout' imported from dsh-llm"
-          exit 1
-
       # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
       - name: Upload smoke log on failure
         if: failure()
