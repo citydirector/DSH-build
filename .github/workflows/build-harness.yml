@@ -155,19 +155,15 @@ jobs:
             --config.link-workspace-packages=true `
             portable/app
 
-      # deploy 产物里的 workspace 包是 symlink/junction，materialize 成真实文件。
-      - name: Materialize symlinks
+      # deploy 产物无 workspace symlink（hoisted 已复制真实文件）；registry 包内部
+      # symlink 由 Compress-Archive 自动 dereference，无需单独 materialize。
+      # 补 deploy 漏的 3 个包：cosmokit/schemastery（link:vendor override）+ cordis-plugin-group（peer 依赖）
+      - name: Patch missing packages
         shell: pwsh
         run: |
-          node _build_repo\portable\materialize.mjs portable\app\node_modules
-
-      # cosmokit/schemastery 是 link:vendor override，deploy 会漏，手动补。
-      - name: Patch link:override packages
-        shell: pwsh
-        run: |
-          foreach ($pkg in @('cosmokit', 'schemastery')) {
-            $src = "vendor\$pkg"
-            $dst = "portable\app\node_modules\@deepseek-ai\$pkg"
+          foreach ($pkg in @(@('cosmokit','cosmokit'), @('schemastery','schemastery'), @('group','cordis-plugin-group'))) {
+            $src = "vendor\$($pkg[0])"
+            $dst = "portable\app\node_modules\@deepseek-ai\$($pkg[1])"
             New-Item -ItemType Directory -Force $dst | Out-Null
             if (Test-Path "$src\lib") { Copy-Item "$src\lib" "$dst\lib" -Recurse -Force }
             Copy-Item "$src\package.json" "$dst\package.json" -Force
