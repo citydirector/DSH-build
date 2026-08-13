@@ -16,6 +16,16 @@ class DshUpdater
 
     static int Main()
     {
+        int code = Run();
+        // 停留窗口：update 双击运行时一闪而过，用户看不到信息。统一在退出前暂停。
+        Console.WriteLine();
+        Console.WriteLine("按任意键退出...");
+        try { Console.ReadKey(); } catch { }
+        return code;
+    }
+
+    static int Run()
+    {
         // GitHub 要求 TLS 1.2
         ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; // Tls12
 
