@@ -148,11 +148,11 @@ jobs:
       - name: Deploy portable runtime
         shell: pwsh
         run: |
-          pnpm --filter @deepseek-ai/dsh deploy --legacy --prod `
+          pnpm --filter @deepseek-ai/dsh --prod deploy --legacy `
             --config.node-linker=hoisted `
             --config.link-workspace-packages=true `
             --config.auto-install-peers=false `
-            --out portable/node_modules
+            portable/node_modules
 
       # 复制 node 24 运行时（setup-node 装的）
       - name: Copy node runtime
