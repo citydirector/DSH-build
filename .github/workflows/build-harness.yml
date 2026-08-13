@@ -225,6 +225,13 @@ jobs:
           & portable\node\node.exe portable\app\lib\bin.js --dump-default-config --profile web
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败（插件树 boot 失败）" }
 
+      # 临时：验证失败通知链路（演练后删除）
+      - name: Intentional failure (verify notify)
+        shell: pwsh
+        run: |
+          Write-Error "模拟缺依赖：Cannot find package '@deepseek-ai/dsh-timeout' imported from dsh-llm"
+          exit 1
+
       - name: Package portable zip
         shell: pwsh
         run: |
