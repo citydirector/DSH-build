@@ -1,0 +1,144 @@
+name: Build DSH
+
+# 参考 arkmower-builds 的模式：定时拉上游 master，有新 commit 才构建并发布到 GitHub Releases。
+# 放在你自己的发布仓库（例如 deepseek-harness-builds）的 .github/workflows/ 下即可。
+# 关键：比较 SHA 用 checkout 之后的 git rev-parse HEAD（真实上游 HEAD），不要用 github.sha（那是本仓库的）。
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # -------- 检出上游代码 --------
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          # release:pack 等脚本会读 git tags，用完整历史（与官方 release.yml 一致）
+          fetch-depth: 0
+
+      # -------- 检查是否有新提交 --------
+      - name: Check if upstream has new commits
+        id: check
+        shell: bash
+        run: |
+          releaseTag="dsh-master-latest"
+          currentSha="$(git rev-parse HEAD)"
+          apiUrl="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$releaseTag"
+          if body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" "$apiUrl" | jq -r .body)"; then
+            lastSha="$(printf '%s' "$body" | sed 's/.*@//')"
+            if [ "$lastSha" = "$currentSha" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "✅ 上游 master 无新提交 ($currentSha)，跳过构建"
+              exit 0
+            fi
+            echo "📦 上游 master 有更新: $lastSha → $currentSha"
+          else
+            echo "🆕 首次构建或查询出错，将执行构建"
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      # -------- 版本信息 --------
+      - id: version
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          sha="$(git rev-parse HEAD | cut -c1-7)"
+          date="$(date +%Y%m%d)"
+          echo "artifact=dsh-master-${date}-${sha}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=dsh-master-latest" >> "$GITHUB_OUTPUT"
+          echo "release_title=DSH master ($date)" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # -------- Node / pnpm --------
+      - uses: pnpm/action-setup@v4
+        if: steps.check.outputs.skip != 'true'
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      # -------- 构建（官方 release 链） --------
+      - name: Build
+        if: steps.check.outputs.skip != 'true'
+        run: pnpm run build
+
+      - name: Pack release tarballs
+        if: steps.check.outputs.skip != 'true'
+        run: pnpm run release:pack --family dsh --out dist/npm
+
+      # -------- 压缩 --------
+      - name: Archive
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          zip -r "${{ steps.version.outputs.artifact }}.zip" dist/npm
+          ls -lh "${{ steps.version.outputs.artifact }}.zip"
+
+      # -------- 发布到 Releases --------
+      - name: Remove old release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "dsh-master-latest" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "dsh-master-latest" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            echo "已删除旧 Release"
+          else
+            echo "无旧 Release 需要删除（首次构建）"
+          fi
+
+      - name: Create Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "dsh-master-latest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${{ steps.version.outputs.release_title }}" \
+            --notes "Auto build master@$(git rev-parse HEAD)" \
+            "${{ steps.version.outputs.artifact }}.zip"
+
+      # -------- 发送 Server3 通知（成功） --------
+      - name: Send notification (success)
+        if: ${{ steps.check.outputs.skip != 'true' && success() }}
+        env:
+          SC3_UID: ${{ secrets.SC3_UID }}
+          SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
+        run: |
+          sha="${{ steps.version.outputs.sha }}"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/dsh-master-latest"
+          body="{\"title\":\"DSH master 构建成功\",\"desp\":\"✅ DSH (master) 构建完成 - 提交: $sha - 下载: dsh-master-latest\"}"
+          curl -sf -X POST -H "Content-Type: application/json" -d "$body" \
+            "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
+
+      # -------- 发送 Server3 通知（失败） --------
+      - name: Send notification (failure)
+        if: ${{ failure() && steps.check.outputs.skip != 'true' }}
+        env:
+          SC3_UID: ${{ secrets.SC3_UID }}
+          SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
+        run: |
+          sha="${{ steps.version.outputs.sha }}"
+          actionsUrl="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="{\"title\":\"DSH master 构建失败\",\"desp\":\"❌ DSH (master) 构建失败 - 提交: $sha - 日志: $actionsUrl\"}"
+          curl -sf -X POST -H "Content-Type: application/json" -d "$body" \
+            "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
