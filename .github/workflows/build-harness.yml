@@ -293,7 +293,7 @@ jobs:
           sha="${{ needs.check.outputs.short_sha }}"
           url="https://github.com/$GITHUB_REPOSITORY/releases/tag/dsh-master-latest"
           jq -n --arg sha "$sha" --arg url "$url" \
-            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成 - 提交: "+$sha+" - 下载: dsh-master-latest")}' \
+            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: dsh-master-latest")}' \
             > /tmp/body.json
           curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
@@ -327,7 +327,7 @@ jobs:
             --arg sha "${{ needs.check.outputs.short_sha }}" \
             --arg err "$err" \
             --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{title:("DSH 构建失败 - "+$sha),desp:("❌ DSH 构建失败\n提交: "+$sha+"\n日志: "+$url+"\n\n--- 错误摘要 ---\n"+$err)}' \
+            '{title:("DSH 构建失败 - "+$sha),desp:("❌ DSH 构建失败\n\n提交: "+$sha+"\n\n日志: "+$url+"\n\n错误摘要:\n```\n"+$err+"\n```")}' \
             > /tmp/body.json
           curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
