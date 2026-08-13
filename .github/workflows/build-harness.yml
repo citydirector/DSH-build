@@ -282,19 +282,46 @@ jobs:
         run: |
           sha="${{ needs.check.outputs.short_sha }}"
           url="https://github.com/$GITHUB_REPOSITORY/releases/tag/dsh-master-latest"
-          body="{\"title\":\"DSH 构建成功\",\"desp\":\"✅ DSH 构建完成 - 提交: $sha - 下载: dsh-master-latest\"}"
-          curl -sf -X POST -H "Content-Type: application/json" -d "$body" \
+          jq -n --arg sha "$sha" --arg url "$url" \
+            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成 - 提交: "+$sha+" - 下载: dsh-master-latest")}' \
+            > /tmp/body.json
+          curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
 
-      # -------- 通知（失败） --------
-      - name: Send notification (failure)
-        if: failure()
+  # -------- 失败通知（独立 job：check/npm/portable 任一失败都触发） --------
+  # 关键：不能放在 release job 里——release 的 needs 失败时会被整体跳过，导致
+  # if: failure() 永不触发。独立 job + job 级 if: failure() 才能捕获上游失败。
+  notify-failure:
+    needs: [check, npm, portable]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect error summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 拉失败步骤的日志，提取关键错误行（缺依赖会显示 Cannot find package ...）
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null > /tmp/failed.log || true
+          grep -iE "error|cannot find|cannot resolve|not found|ERR_|throw|AggregateError|failed to" /tmp/failed.log \
+            | grep -viE "DeprecationWarning|trace-deprecation|Node.js [0-9]+ is deprecated" \
+            | head -20 > /tmp/err.txt || true
+          # 写入 GITHUB_ENV（多行，供下一步 jq 使用）
+          {
+            echo "ERR_SUMMARY<<EOF"
+            cat /tmp/err.txt
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Send failure notification
         env:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: |
-          sha="${{ needs.check.outputs.short_sha }}"
-          actionsUrl="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          body="{\"title\":\"DSH 构建失败\",\"desp\":\"❌ DSH 构建失败 - 提交: $sha - 日志: $actionsUrl\"}"
-          curl -sf -X POST -H "Content-Type: application/json" -d "$body" \
+          jq -n \
+            --arg sha "${{ needs.check.outputs.short_sha }}" \
+            --arg err "$ERR_SUMMARY" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{title:("DSH 构建失败 - "+$sha),desp:("❌ DSH 构建失败\n提交: "+$sha+"\n日志: "+$url+"\n\n--- 错误摘要 ---\n"+$err)}' \
+            > /tmp/body.json
+          curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
