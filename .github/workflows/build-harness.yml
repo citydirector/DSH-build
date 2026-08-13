@@ -153,18 +153,17 @@ jobs:
         run: |
           node _build_repo\portable\stage.mjs node_modules portable\app\node_modules
 
-      # 诊断：确认 build 产物与 materialize 结果
-      - name: Diagnose
+      # @deepseek-ai/dsh 是顶层 CLI app，不被任何包依赖，install 后不在 node_modules 里。
+      # 手动把它（lib + config + package.json）放进去，bin.js 才能被 node 解析。
+      - name: Copy @deepseek-ai/dsh entry package
         shell: pwsh
         run: |
-          Write-Host "=== apps/cli/lib (build 产物) ==="
-          if (Test-Path apps\cli\lib) { Get-ChildItem apps\cli\lib | Select-Object -First 10 Name } else { Write-Host "apps/cli/lib 不存在" }
-          Write-Host "=== node_modules/@deepseek-ai/dsh (install 后) ==="
-          $p = "node_modules\@deepseek-ai\dsh"
-          if (Test-Path $p) { (Get-Item $p).LinkType; (Get-Item $p).Attributes; Get-ChildItem $p | Select-Object -First 10 Name } else { Write-Host "install 后 dsh 不存在" }
-          Write-Host "=== portable/app/node_modules/@deepseek-ai/dsh (stage 后) ==="
-          $q = "portable\app\node_modules\@deepseek-ai\dsh"
-          if (Test-Path $q) { Get-ChildItem $q | Select-Object -First 10 Name; Write-Host "--- lib ---"; if (Test-Path "$q\lib") { Get-ChildItem "$q\lib" | Select-Object -First 10 Name } else { Write-Host "stage 后 dsh/lib 不存在" } } else { Write-Host "stage 后 dsh 不存在" }
+          $dst = "portable\app\node_modules\@deepseek-ai\dsh"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item apps\cli\lib "$dst\lib" -Recurse -Force
+          Copy-Item apps\cli\config "$dst\config" -Recurse -Force
+          Copy-Item apps\cli\package.json "$dst\package.json" -Force
+          if (-not (Test-Path "$dst\lib\bin.js")) { throw "bin.js 未复制成功" }
 
       # 复制 node 24 运行时（setup-node 装的）
       - name: Copy node runtime
