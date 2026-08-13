@@ -144,39 +144,39 @@ jobs:
         shell: pwsh
         run: pnpm run build
 
-      # 全量复制 install 后的 node_modules，再用 stage.mjs 把所有 symlink/junction
-      # (workspace 包、link:vendor override 包) materialize 成真实文件，得到扁平无链接目录。
-      # 不 deploy：dsh 运行时插件在 devDependencies、cosmokit/schemastery 是 link:override，
-      # deploy 单包会漏；全量复制 + materialize 最可靠。
-      - name: Stage node_modules (copy + materialize symlinks)
+      # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
+      # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
+      # devDependencies，靠 cordis 动态加载）；不加 auto-install-peers=false。
+      - name: Deploy portable runtime
         shell: pwsh
         run: |
-          node _build_repo\portable\stage.mjs node_modules portable\app\node_modules
+          pnpm --filter @deepseek-ai/dsh deploy --legacy `
+            --config.node-linker=hoisted `
+            --config.link-workspace-packages=true `
+            portable/app
 
-      # @deepseek-ai/dsh 是顶层 CLI app，不被任何包依赖，install 后不在 node_modules 里。
-      # 手动把它（lib + config + package.json）放进去，bin.js 才能被 node 解析。
-      - name: Copy @deepseek-ai/dsh entry package
+      # deploy 产物里的 workspace 包是 symlink/junction，materialize 成真实文件。
+      - name: Materialize symlinks
         shell: pwsh
         run: |
-          $dst = "portable\app\node_modules\@deepseek-ai\dsh"
-          New-Item -ItemType Directory -Force $dst | Out-Null
-          Copy-Item apps\cli\lib "$dst\lib" -Recurse -Force
-          Copy-Item apps\cli\config "$dst\config" -Recurse -Force
-          Copy-Item apps\cli\package.json "$dst\package.json" -Force
-          if (-not (Test-Path "$dst\lib\bin.js")) { throw "bin.js 未复制成功" }
+          node _build_repo\portable\materialize.mjs portable\app\node_modules
 
-      # 诊断 dsh-app-boot
-      - name: Diagnose dsh-app-boot
+      # cosmokit/schemastery 是 link:vendor override，deploy 会漏，手动补。
+      - name: Patch link:override packages
         shell: pwsh
         run: |
-          Write-Host "=== install 后 node_modules/@deepseek-ai/dsh-app-boot ==="
-          $a = "node_modules\@deepseek-ai\dsh-app-boot"
-          if (Test-Path $a) { $i = Get-Item $a -Force; Write-Host "LinkType=$($i.LinkType) Attr=$($i.Attributes)"; Get-ChildItem $a -Force -ErrorAction SilentlyContinue | Select-Object -First 5 Name } else { Write-Host "不存在" }
-          Write-Host "=== stage 后 portable/app/node_modules/@deepseek-ai/dsh-app-boot ==="
-          $b = "portable\app\node_modules\@deepseek-ai\dsh-app-boot"
-          if (Test-Path $b) { $j = Get-Item $b -Force; Write-Host "LinkType=$($j.LinkType) Attr=$($j.Attributes)"; Write-Host "package.json=$(Test-Path "$b\package.json") lib/index.js=$(Test-Path "$b\lib\index.js")"; Get-ChildItem $b -Force -ErrorAction SilentlyContinue | Select-Object -First 8 Name } else { Write-Host "不存在" }
-          Write-Host "=== scope 下包数 ==="
-          (Get-ChildItem "portable\app\node_modules\@deepseek-ai" -Force -ErrorAction SilentlyContinue).Count
+          foreach ($pkg in @('cosmokit', 'schemastery')) {
+            $src = "vendor\$pkg"
+            $dst = "portable\app\node_modules\@deepseek-ai\$pkg"
+            New-Item -ItemType Directory -Force $dst | Out-Null
+            if (Test-Path "$src\lib") { Copy-Item "$src\lib" "$dst\lib" -Recurse -Force }
+            Copy-Item "$src\package.json" "$dst\package.json" -Force
+          }
+          # schemastery 依赖 @standard-schema/spec（registry 包），从 install 结果复制
+          if (Test-Path "node_modules\@standard-schema\spec") {
+            New-Item -ItemType Directory -Force "portable\app\node_modules\@standard-schema" | Out-Null
+            Copy-Item "node_modules\@standard-schema\spec" "portable\app\node_modules\@standard-schema\spec" -Recurse -Force
+          }
 
       # 复制 node 24 运行时（setup-node 装的）
       - name: Copy node runtime
@@ -212,7 +212,7 @@ jobs:
         run: |
           $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
           $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          & portable\node\node.exe portable\app\node_modules\@deepseek-ai\dsh\lib\bin.js --help
+          & portable\node\node.exe portable\app\lib\bin.js --help
           if ($LASTEXITCODE -ne 0) { throw "dsh 冒烟测试失败" }
 
       - name: Package portable zip
