@@ -13,21 +13,29 @@ class DshLauncher
 {
     static int Main(string[] args)
     {
+        try
+        {
+            return Run(args);
+        }
+        catch (Exception ex)
+        {
+            try { Console.Error.WriteLine("dsh 启动失败：" + ex.ToString()); } catch { }
+            PauseBeforeExit();
+            return 1;
+        }
+    }
+
+    static int Run(string[] args)
+    {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string nodeExe = Path.Combine(baseDir, "node", "node.exe");
         string binJs = Path.Combine(baseDir, "app", "lib", "bin.js");
         string dataDir = Path.Combine(baseDir, "data");
 
         if (!File.Exists(nodeExe))
-        {
-            Console.Error.WriteLine("错误：未找到 node 运行时（" + nodeExe + "）。请勿把 dsh.exe 移出程序目录。");
-            return 1;
-        }
+            return Fail("错误：未找到 node 运行时（" + nodeExe + "）。请勿把 dsh.exe 移出程序目录。");
         if (!File.Exists(binJs))
-        {
-            Console.Error.WriteLine("错误：未找到 dsh 入口（" + binJs + "）。程序不完整，请重新下载完整包。");
-            return 1;
-        }
+            return Fail("错误：未找到 dsh 入口（" + binJs + "）。程序不完整，请重新下载完整包。");
 
         // 绿色：数据放程序目录内 data/，绝不写 C 盘用户目录的 ~/.dsh
         Directory.CreateDirectory(dataDir);
@@ -106,7 +114,30 @@ class DshLauncher
         }
 
         p.WaitForExit();
+        if (p.ExitCode != 0)
+        {
+            try { Console.Error.WriteLine("dsh 已退出，退出码 " + p.ExitCode); } catch { }
+            PauseBeforeExit();
+        }
         return p.ExitCode;
+    }
+
+    static int Fail(string msg)
+    {
+        try { Console.Error.WriteLine(msg); } catch { }
+        PauseBeforeExit();
+        return 1;
+    }
+
+    static void PauseBeforeExit()
+    {
+        try
+        {
+            Console.WriteLine();
+            Console.WriteLine("按任意键退出...");
+            Console.ReadKey(true);
+        }
+        catch { }
     }
 
     static bool PortOpen(string host, int port)
