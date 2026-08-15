@@ -1,4 +1,4 @@
-// dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
+﻿// dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
 // 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH → 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
 
@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using Microsoft.Win32;
 
@@ -13,6 +14,9 @@ class DshLauncher
 {
     static int Main(string[] args)
     {
+        // 统一输出 UTF-8：与 node 的 UTF-8 输出、现代终端（chcp 65001）对齐，
+        // 避免中文在 GBK 代码页/CI 编译差异下显示乱码。
+        try { Console.OutputEncoding = Encoding.UTF8; } catch { }
         try
         {
             return Run(args);
@@ -86,10 +90,23 @@ class DshLauncher
             psi.Arguments += " " + Quote(a);
         }
 
+        // 累积 stderr 尾部：node 异常退出时落盘，终端乱码/已关闭也能追溯崩溃原因
+        StringBuilder errTail = new StringBuilder();
+        const int ERR_TAIL_MAX = 65536;
+
         Process p = new Process();
         p.StartInfo = psi;
         p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Console.Out.WriteLine(e.Data); };
-        p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Console.Error.WriteLine(e.Data); };
+        p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
+        {
+            if (e.Data == null) return;
+            Console.Error.WriteLine(e.Data);
+            lock (errTail)
+            {
+                if (errTail.Length > ERR_TAIL_MAX) errTail.Remove(0, errTail.Length - ERR_TAIL_MAX);
+                errTail.AppendLine(e.Data);
+            }
+        };
         p.Start();
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
@@ -116,6 +133,18 @@ class DshLauncher
         p.WaitForExit();
         if (p.ExitCode != 0)
         {
+            try
+            {
+                // 把 stderr 尾部写入 data/launcher-crash.log，方便诊断（如睡眠唤醒后 node 静默退出）
+                string tail;
+                lock (errTail) { tail = errTail.ToString(); }
+                string crashLog = Path.Combine(dataDir, "launcher-crash.log");
+                File.AppendAllText(crashLog,
+                    "\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " dsh exit code " + p.ExitCode + " =====\n"
+                    + tail
+                    + "===== end =====\n");
+            }
+            catch { }
             try { Console.Error.WriteLine("dsh 已退出，退出码 " + p.ExitCode); } catch { }
             PauseBeforeExit();
         }
