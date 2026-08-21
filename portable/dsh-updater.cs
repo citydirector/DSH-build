@@ -3,12 +3,14 @@
 // 绿色：不写注册表、不写 C 盘用户目录；一切在程序目录内完成。
 
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 class DshUpdater
 {
@@ -16,6 +18,8 @@ class DshUpdater
 
     static int Main()
     {
+        // 统一输出 UTF-8（与 launcher 一致，避免 CI 编译/终端代码页差异导致中文乱码）
+        try { Console.OutputEncoding = Encoding.UTF8; } catch { }
         int code = Run();
         // 停留窗口：update 双击运行时一闪而过，用户看不到信息。统一在退出前暂停。
         Console.WriteLine();
@@ -58,7 +62,8 @@ class DshUpdater
             return 1;
         }
 
-        Console.WriteLine("发现新版本 " + tag + "，正在下载...");
+        string newShort = latestSha.Length >= 7 ? latestSha.Substring(0, 7) : tag;
+        Console.WriteLine("发现新版本 " + newShort + "（" + tag + "），正在下载...");
 
         string updateDir = Path.Combine(baseDir, "data", ".update");
         Directory.CreateDirectory(updateDir);
@@ -87,6 +92,9 @@ class DshUpdater
             Console.Error.WriteLine("检测到 dsh 正在运行，请先关闭 dsh 再执行更新。");
             return 1;
         }
+
+        // 更新前备份旧版本（app/node/启动器/版本/更新器），出问题可回滚
+        BackupOld(baseDir);
 
         // 生成延迟覆盖脚本，规避覆盖正在运行的 update.exe 自身的锁
         string applyCmd = Path.Combine(updateDir, "apply-update.cmd");
@@ -131,7 +139,31 @@ class DshUpdater
             using (WebClient wc = new WebClient())
             {
                 wc.Headers.Add("User-Agent", "dsh-portable-updater");
-                wc.DownloadFile(url, path);
+                using (AutoResetEvent done = new AutoResetEvent(false))
+                {
+                    Exception error = null;
+                    int lastPct = -1;
+                    wc.DownloadProgressChanged += delegate(object s, DownloadProgressChangedEventArgs e)
+                    {
+                        int pct = e.ProgressPercentage;
+                        if (pct != lastPct)
+                        {
+                            lastPct = pct;
+                            double got = e.BytesReceived / 1048576.0;
+                            double total = e.TotalBytesToReceive / 1048576.0;
+                            Console.Write("\r下载中... {0}%（{1:0.0} / {2:0.0} MB）  ", pct, got, total);
+                        }
+                    };
+                    wc.DownloadFileCompleted += delegate(object s, AsyncCompletedEventArgs e)
+                    {
+                        error = e.Error;
+                        done.Set();
+                    };
+                    wc.DownloadFileAsync(new Uri(url), path);
+                    done.WaitOne();
+                    Console.WriteLine();
+                    if (error != null) { Console.Error.WriteLine(error.Message); return false; }
+                }
             }
             return true;
         }
@@ -139,6 +171,51 @@ class DshUpdater
         {
             Console.Error.WriteLine(ex.Message);
             return false;
+        }
+    }
+
+    // 更新前把旧版本关键内容打成 zip（app/node/dsh.exe/VERSION/update.exe），便于回滚
+    static void BackupOld(string baseDir)
+    {
+        try
+        {
+            string backupDir = Path.Combine(baseDir, "data", "backups");
+            Directory.CreateDirectory(backupDir);
+            string zipPath = Path.Combine(backupDir, "dsh-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
+            using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                AddDir(zip, Path.Combine(baseDir, "app"), "app");
+                AddDir(zip, Path.Combine(baseDir, "node"), "node");
+                AddFile(zip, Path.Combine(baseDir, "dsh.exe"), "dsh.exe");
+                AddFile(zip, Path.Combine(baseDir, "VERSION"), "VERSION");
+                AddFile(zip, Path.Combine(baseDir, "update.exe"), "update.exe");
+            }
+            Console.WriteLine("已备份旧版本: " + zipPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("备份旧版本失败（继续更新）: " + ex.Message);
+        }
+    }
+
+    static void AddDir(ZipArchive zip, string dir, string prefix)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (string file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            string rel = prefix + "/" + file.Substring(dir.Length).TrimStart('\\', '/').Replace('\\', '/');
+            AddFile(zip, file, rel);
+        }
+    }
+
+    static void AddFile(ZipArchive zip, string path, string entryName)
+    {
+        if (!File.Exists(path)) return;
+        ZipArchiveEntry entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
+        using (Stream src = File.OpenRead(path))
+        using (Stream dst = entry.Open())
+        {
+            src.CopyTo(dst);
         }
     }
 
