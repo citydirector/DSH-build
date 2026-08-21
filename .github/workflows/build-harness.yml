@@ -1,10 +1,13 @@
 name: Build DSH
 
-# 定时拉取上游 deepseek-harness master，有新 commit 才构建。
+# 分支策略：
+#   main —— 稳定发布。定时（cron，仅默认分支生效）拉取上游 deepseek-harness master，
+#           有新 commit 才构建，发布到 dsh-master-latest（正式）。
+#   dev  —— 预发布。手动触发直接构建（不检查上游），发布到 dsh-dev-latest（pre-release）。
+# 流程：有问题先推 dev → 触发构建 → 下载测试 → 没问题再推 main。
 # 两个产物：
 #   1. npm tarball 集合（ubuntu，官方 release:pack 链）
 #   2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe 启动器 + update.exe 更新器）
-# 合并发布到同一个 Release（tag: dsh-master-latest）。
 # 关键：比较上游 SHA 用 checkout 之后的 git rev-parse HEAD，不要用 github.sha。
 
 on:
@@ -47,7 +50,13 @@ jobs:
           shortSha="${currentSha:0:7}"
           echo "sha=$currentSha" >> "$GITHUB_OUTPUT"
           echo "short_sha=$shortSha" >> "$GITHUB_OUTPUT"
-          # 手动触发时勾选 force 可强制构建（无视上游是否有新提交）
+          # 非 main 分支（dev 等）：不检查上游，直接构建，发布到对应的 pre 标签
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "🔨 ${{ github.ref_name }} 分支构建（无上游检查）"
+            exit 0
+          fi
+          # main 分支：手动触发时勾选 force 可强制构建（无视上游是否有新提交）
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force }}" = "true" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "🔨 强制构建 (force=true)"
@@ -296,9 +305,10 @@ jobs:
       - name: Remove old release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name == 'main' && 'dsh-master-latest' || 'dsh-dev-latest' }}
         run: |
-          if gh release view "dsh-master-latest" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "dsh-master-latest" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
             echo "已删除旧 Release"
           else
             echo "无旧 Release 需要删除（首次构建）"
@@ -307,11 +317,14 @@ jobs:
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name == 'main' && 'dsh-master-latest' || 'dsh-dev-latest' }}
+          PRERELEASE_FLAG: ${{ github.ref_name == 'main' && '' || '--prerelease' }}
         run: |
-          gh release create "dsh-master-latest" \
+          gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "DSH master ($(date +%Y%m%d))" \
-            --notes "Auto build master@$(git rev-parse HEAD)" \
+            --title "${{ github.ref_name == 'main' && 'DSH master' || 'DSH dev' }} ($(date +%Y%m%d))" \
+            --notes "Auto build ${{ github.ref_name }}@$(git rev-parse HEAD)" \
+            $PRERELEASE_FLAG \
             artifacts/*/*.zip
 
       # -------- 通知（成功） --------
@@ -322,9 +335,10 @@ jobs:
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: |
           sha="${{ needs.check.outputs.short_sha }}"
-          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/dsh-master-latest"
+          tag="${{ github.ref_name == 'main' && 'dsh-master-latest' || 'dsh-dev-latest' }}"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
           jq -n --arg sha "$sha" --arg url "$url" \
-            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: dsh-master-latest")}' \
+            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: "+$url)}' \
             > /tmp/body.json
           curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
