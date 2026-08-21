@@ -93,7 +93,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm run build
+        run: pnpm run build:official
 
       - name: Pack release tarballs
         run: pnpm run release:pack --family dsh --out dist/npm
@@ -142,7 +142,7 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: pnpm run build
+        run: pnpm run build:official
 
       # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
       # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
