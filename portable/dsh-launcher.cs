@@ -1,4 +1,4 @@
-﻿// dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
+// dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
 // 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH → 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
 
@@ -84,7 +84,10 @@ class DshLauncher
         psi.UseShellExecute = false;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
-        psi.Arguments = Quote(binJs) + (autoWeb ? " web" : "");
+        // 无参数自动 web 时传 --no-open：DSH 本体（node）在新版本里也会自动开浏览器，
+        // 与启动器的 autoWeb 打开逻辑重复（会开两个窗口）。浏览器只由启动器开一次，
+        // 且是在 3080 端口就绪之后。
+        psi.Arguments = Quote(binJs) + (autoWeb ? " web --no-open" : "");
         foreach (string a in args)
         {
             psi.Arguments += " " + Quote(a);
