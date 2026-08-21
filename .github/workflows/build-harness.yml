@@ -319,8 +319,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name == 'main' && 'dsh-master-latest' || 'dsh-dev-latest' }}
         run: |
-          # 注意：不能用 ${{ ... && '' || '--prerelease' }} 表达式——空字符串在 Actions
-          # 表达式里是 falsy，main 分支也会得到 --prerelease。用 bash 判断。
+          # 注意：不要用空字符串作为 main 的 prerelease 标记——Actions 表达式里空字符串
+          # 是 falsy，main 也会拿到 --prerelease。改用 bash 判断。
           prerelease=""
           if [ "${{ github.ref_name }}" != "main" ]; then prerelease="--prerelease"; fi
           gh release create "$RELEASE_TAG" \
