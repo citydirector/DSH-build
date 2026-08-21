@@ -318,13 +318,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name == 'main' && 'dsh-master-latest' || 'dsh-dev-latest' }}
-          PRERELEASE_FLAG: ${{ github.ref_name == 'main' && '' || '--prerelease' }}
         run: |
+          # 注意：不能用 ${{ ... && '' || '--prerelease' }} 表达式——空字符串在 Actions
+          # 表达式里是 falsy，main 分支也会得到 --prerelease。用 bash 判断。
+          prerelease=""
+          if [ "${{ github.ref_name }}" != "main" ]; then prerelease="--prerelease"; fi
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "${{ github.ref_name == 'main' && 'DSH master' || 'DSH dev' }} ($(date +%Y%m%d))" \
             --notes "Auto build ${{ github.ref_name }}@$(git rev-parse HEAD)" \
-            $PRERELEASE_FLAG \
+            $prerelease \
             artifacts/*/*.zip
 
       # -------- 通知（成功） --------
