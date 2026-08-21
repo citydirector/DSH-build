@@ -215,6 +215,7 @@ jobs:
             _build_repo\portable\dsh-launcher.cs
           & $csc /nologo /target:exe /out:portable\update.exe `
             /r:System.IO.Compression.FileSystem.dll `
+            /r:System.IO.Compression.dll `
             _build_repo\portable\dsh-updater.cs
           if (-not (Test-Path portable\dsh.exe)) { throw "dsh.exe 编译失败" }
           if (-not (Test-Path portable\update.exe)) { throw "update.exe 编译失败" }
