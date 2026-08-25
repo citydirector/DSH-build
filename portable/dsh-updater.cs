@@ -3,6 +3,7 @@
 // 绿色：不写注册表、不写 C 盘用户目录；一切在程序目录内完成。
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -174,22 +175,49 @@ class DshUpdater
         }
     }
 
-    // 更新前把旧版本关键内容打成 zip（app/node/dsh.exe/VERSION/update.exe），便于回滚
+    // 更新前把旧版本关键内容打成 zip（app/node/dsh.exe/VERSION/update.exe），便于回滚。
+    // node 零散文件很多，deflate 压缩的 CPU 开销是主要耗时；备份只求能回滚、不求体积，
+    // 所以用 NoCompression 纯拷贝，并实时显示文件数进度（每 1% 刷新一次行内提示）。
     static void BackupOld(string baseDir)
     {
         try
         {
+            List<string[]> files = new List<string[]>();
+            CollectFiles(files, Path.Combine(baseDir, "app"), "app");
+            CollectFiles(files, Path.Combine(baseDir, "node"), "node");
+            AddOne(files, Path.Combine(baseDir, "dsh.exe"), "dsh.exe");
+            AddOne(files, Path.Combine(baseDir, "VERSION"), "VERSION");
+            AddOne(files, Path.Combine(baseDir, "update.exe"), "update.exe");
+            if (files.Count == 0)
+            {
+                Console.WriteLine("没有可备份的文件，跳过备份。");
+                return;
+            }
             string backupDir = Path.Combine(baseDir, "data", "backups");
             Directory.CreateDirectory(backupDir);
             string zipPath = Path.Combine(backupDir, "dsh-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
+            Console.WriteLine("正在备份 " + files.Count + " 个文件...");
             using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
             {
-                AddDir(zip, Path.Combine(baseDir, "app"), "app");
-                AddDir(zip, Path.Combine(baseDir, "node"), "node");
-                AddFile(zip, Path.Combine(baseDir, "dsh.exe"), "dsh.exe");
-                AddFile(zip, Path.Combine(baseDir, "VERSION"), "VERSION");
-                AddFile(zip, Path.Combine(baseDir, "update.exe"), "update.exe");
+                int done = 0;
+                int lastPct = -1;
+                foreach (string[] item in files)
+                {
+                    using (Stream src = File.OpenRead(item[0]))
+                    using (Stream dst = zip.CreateEntry(item[1], CompressionLevel.NoCompression).Open())
+                    {
+                        src.CopyTo(dst);
+                    }
+                    done++;
+                    int pct = (int)((long)done * 100 / files.Count);
+                    if (pct != lastPct)
+                    {
+                        lastPct = pct;
+                        Console.Write("\r备份中... {0}%（{1}/{2} 文件）  ", pct, done, files.Count);
+                    }
+                }
             }
+            Console.WriteLine();
             Console.WriteLine("已备份旧版本: " + zipPath);
         }
         catch (Exception ex)
@@ -198,25 +226,19 @@ class DshUpdater
         }
     }
 
-    static void AddDir(ZipArchive zip, string dir, string prefix)
+    static void CollectFiles(List<string[]> list, string dir, string prefix)
     {
         if (!Directory.Exists(dir)) return;
         foreach (string file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
         {
             string rel = prefix + "/" + file.Substring(dir.Length).TrimStart('\\', '/').Replace('\\', '/');
-            AddFile(zip, file, rel);
+            list.Add(new string[] { file, rel });
         }
     }
 
-    static void AddFile(ZipArchive zip, string path, string entryName)
+    static void AddOne(List<string[]> list, string path, string entryName)
     {
-        if (!File.Exists(path)) return;
-        ZipArchiveEntry entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
-        using (Stream src = File.OpenRead(path))
-        using (Stream dst = entry.Open())
-        {
-            src.CopyTo(dst);
-        }
+        if (File.Exists(path)) list.Add(new string[] { path, entryName });
     }
 
     static string JsonValue(string json, string key)
