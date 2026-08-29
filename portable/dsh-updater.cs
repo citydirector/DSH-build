@@ -40,7 +40,11 @@ class DshUpdater
 
         Console.WriteLine("检查更新中... 当前版本: " + (current.Length >= 7 ? current.Substring(0, 7) : (current == "" ? "未知" : current)));
 
-        string json = HttpGet("https://api.github.com/repos/" + Repo + "/releases/latest");
+        string channel = ChooseChannel();
+        string releaseUrl = channel == "dev"
+            ? "https://api.github.com/repos/" + Repo + "/releases/tags/dsh-dev-latest"
+            : "https://api.github.com/repos/" + Repo + "/releases/latest";
+        string json = HttpGet(releaseUrl);
         if (json == null)
         {
             Console.Error.WriteLine("无法连接 GitHub，检查更新失败（需要网络）。");
@@ -117,7 +121,52 @@ class DshUpdater
         return 0;
     }
 
-    static string HttpGet(string url)
+    // 选择更新通道：3 秒倒计时默认 main；按 2 选 dev，其余/超时选 main。
+    // 现网 update.exe 只走 master（releases/latest）；dev 为预发布需按 tags 拉取。
+    static string ChooseChannel()
+    {
+        try
+        {
+            Console.WriteLine();
+            Console.WriteLine("选择更新通道（默认 main，3 秒后自动选 main）：");
+            Console.WriteLine("  [1] main（正式）   [2] dev（预发布）");
+            int deadline = 3;
+            Console.Write("等待选择... 3 秒后自动 main");
+            DateTime start = DateTime.UtcNow;
+            int last = 4;
+            while ((DateTime.UtcNow - start).TotalSeconds < deadline)
+            {
+                if (Console.KeyAvailable)
+                {
+                    ConsoleKeyInfo k = Console.ReadKey(true);
+                    if (k.KeyChar == '2')
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("已选择 dev（预发布）");
+                        return "dev";
+                    }
+                    Console.WriteLine();
+                    Console.WriteLine("已选择 main（正式）");
+                    return "main";
+                }
+                int left = deadline - (int)(DateTime.UtcNow - start).TotalSeconds;
+                if (left != last)
+                {
+                    last = left;
+                    Console.Write("\r等待选择... " + left + " 秒后自动 main  ");
+                }
+                Thread.Sleep(100);
+            }
+            Console.WriteLine();
+            Console.WriteLine("超时，默认 main（正式）");
+            return "main";
+        }
+        catch
+        {
+            return "main";
+        }
+    }
+        static string HttpGet(string url)
     {
         try
         {
