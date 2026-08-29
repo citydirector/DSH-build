@@ -87,13 +87,8 @@ class DshUpdater
         }
 
         if (Directory.Exists(newDir)) Directory.Delete(newDir, true);
-        try
+        if (!ExtractZip(zipPath, newDir))
         {
-            ZipFile.ExtractToDirectory(zipPath, newDir);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine("解压失败：" + ex.Message);
             return 1;
         }
 
@@ -226,6 +221,53 @@ class DshUpdater
         }
         catch
         {
+            return false;
+        }
+    }
+        // 解压 zip 并实时显示进度。ZipFile.ExtractToDirectory 对大 zip 长时间静默，
+    // 用户会误以为卡死；这里逐条解压并刷新计数（每 400ms 一次）。带路径穿越防护。
+    static bool ExtractZip(string zipPath, string outDir)
+    {
+        try
+        {
+            string fullOut = Path.GetFullPath(outDir);
+            Directory.CreateDirectory(fullOut);
+            DateTime last = DateTime.UtcNow;
+            long done = 0;
+            long total = 0;
+            using (ZipArchive zip = ZipFile.OpenRead(zipPath))
+            {
+                total = zip.Entries.Count;
+                Console.Write("正在解压...");
+                foreach (ZipArchiveEntry entry in zip.Entries)
+                {
+                    bool isDir = entry.FullName.EndsWith("/");
+                    string entryName = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                    string dest = Path.GetFullPath(Path.Combine(fullOut, entryName));
+                    if (!dest.StartsWith(fullOut, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (isDir) { Directory.CreateDirectory(dest); continue; }
+                    string dir = Path.GetDirectoryName(dest);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                    using (Stream es = entry.Open())
+                    using (Stream ds = File.Create(dest))
+                    {
+                        es.CopyTo(ds);
+                    }
+                    done++;
+                    if ((DateTime.UtcNow - last).TotalMilliseconds > 400)
+                    {
+                        last = DateTime.UtcNow;
+                        Console.Write("\r正在解压... {0}/{1} 个文件  ", done, total);
+                    }
+                }
+            }
+            Console.Write("\r" + new string(' ', 50) + "\r");
+            Console.WriteLine("解压完成（共 {0} 个条目）", total);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("解压失败：" + ex.Message);
             return false;
         }
     }
