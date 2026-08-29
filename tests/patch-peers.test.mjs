@@ -3,7 +3,7 @@
 //   1) 源码缺 build 产物时，能从 hoisted 根 node_modules 兜底补齐（schemastery 场景）。
 //   2) 部署图里某 @deepseek-ai 依赖在所有来源都缺失时，终止构建（非零退出）+ 明确报错。
 // 用独立临时 fixture 构造，不依赖真实上游；可本地跑，也可在 CI 里跑。
-import { mkdtemp, writeFile, mkdir, rm, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, readdir, stat, symlink, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,6 +131,32 @@ async function existsDir(p) { try { await stat(p); return true; } catch { return
   // 已存在的包不应被重复覆盖（哨兵文件应保留）
   ok(await existsDir(join(f.target, 'schemastery', 'lib', 'sentinel.txt')),
       '场景3: 已存在的 schemastery 未被重复覆盖');
+  await rm(f.base, { recursive: true, force: true });
+}
+
+// ---- 场景 4：目标里的 @deepseek-ai 包是符号链接 → 替换成真实副本（防打包被跳过）----
+{
+  const f = await fixture({ hoistedHas: true });
+  // ws 源码给 schemastery 补上 lib（这样 patch-peers 能重新生成真实副本）
+  const srcSche = join(f.wsRoot, 'vendor', 'schemastery');
+  await mkdir(join(srcSche, 'lib'), { recursive: true });
+  await writeFile(join(srcSche, 'lib', 'index.mjs'), 'export default {};\n');
+  // 目标里 schemastery 建为【符号链接】指向源码（模拟 pnpm deploy 的联结点）
+  const targetSche = join(f.target, 'schemastery');
+  await symlink(join(srcSche, 'lib'), targetSche, 'dir');
+  // 目标里其他依赖保持自足，单独验证 schemastery 从链接变真实
+  await mkdir(join(f.target, 'cosmokit', 'lib'), { recursive: true });
+  await writeFile(join(f.target, 'cosmokit', 'lib', 'index.mjs'), 'export default {};\n');
+  await writeJson(join(f.target, 'cosmokit', 'package.json'), {
+    name: '@deepseek-ai/cosmokit', version: '1.0.0', main: 'lib/index.mjs', type: 'module',
+  });
+
+  const r = await runScript(f.wsRoot, f.target);
+  ok(r.code === 0, '场景4: 符号链接替换为真实副本后构建通过 (exit 0)');
+  ok(r.out.includes('符号链接'), '场景4: 日志标注替换符号链接');
+  const st = await lstat(targetSche);
+  ok(!st.isSymbolicLink(), '场景4: schemastery 已不再是符号链接');
+  ok(await existsDir(join(targetSche, 'lib', 'index.mjs')), '场景4: 真实副本含 lib 产物');
   await rm(f.base, { recursive: true, force: true });
 }
 
