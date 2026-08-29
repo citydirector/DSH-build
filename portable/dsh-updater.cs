@@ -229,12 +229,36 @@ class DshUpdater
     static void CollectFiles(List<string[]> list, string dir, string prefix)
     {
         if (!Directory.Exists(dir)) return;
-        foreach (string file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+        // 手写递归遍历并实时输出扫描进度：Directory.GetFiles(..., AllDirectories) 在
+        // 巨大 node_modules 上会长时间无输出，用户会误以为卡死。这里边扫边刷新计数。
+        var stack = new Stack<string>();
+        stack.Push(dir);
+        DateTime last = DateTime.UtcNow;
+        long scanned = 0;
+        Console.Write("正在扫描本地文件...");
+        while (stack.Count > 0)
         {
-            string rel = prefix + "/" + file.Substring(dir.Length).TrimStart('\\', '/').Replace('\\', '/');
-            list.Add(new string[] { file, rel });
+            string current = stack.Pop();
+            string[] subdirs;
+            try { subdirs = Directory.GetDirectories(current); } catch { subdirs = new string[0]; }
+            foreach (string sd in subdirs) stack.Push(sd);
+            string[] fileEntries;
+            try { fileEntries = Directory.GetFiles(current); } catch { fileEntries = new string[0]; }
+            foreach (string file in fileEntries)
+            {
+                string rel = prefix + "/" + file.Substring(dir.Length) .TrimStart('\\', '/') .Replace('\\', '/');
+                list.Add(new string[] { file, rel });
+                scanned++;
+                if ((DateTime.UtcNow - last).TotalMilliseconds > 400)
+                {
+                    last = DateTime.UtcNow;
+                    Console.Write("\r正在扫描本地文件... {0} 个  ", scanned);
+                }
+            }
         }
+        Console.Write("\r" + new string(' ', 50) + "\r"); // 清掉扫描进度行
     }
+
 
     static void AddOne(List<string[]> list, string path, string entryName)
     {
