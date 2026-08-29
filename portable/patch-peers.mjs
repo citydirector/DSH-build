@@ -3,9 +3,14 @@
 // 本脚本遍历 workspace 全部 @deepseek-ai 包，把 target node_modules 里缺失的包补齐：
 //   优先复制该包的 lib/ + package.json（build 产物已生成）；若源码缺 build 产物，
 //   则从 hoisted 根 node_modules 兜底复制（hoisted 会把 workspace 包连同产物提升到根）。
+//
+// 关键坑：pnpm deploy 会把 workspace 包装成符号链接/联结点，而 Compress-Archive 打包时
+// 不跟随符号链接，导致 schemastery 这类包在产物里消失（CI 上能解析、本地却 ERR_MODULE_NOT_FOUND）。
+// 所以对已存在的表项：若是符号链接/联结点，删除并替换成真实副本（lib + package.json）。
+//
 // 最后校验：所有已部署 @deepseek-ai 包的 @deepseek-ai 依赖必须能解析到，否则抛错终止构建，
-// 避免把缺包的坏产物静默发布出去（schemastery 被漏掉即由此挡住）。
-import { readdir, readFile, mkdir, stat, copyFile } from 'node:fs/promises';
+// 避免把缺包的坏产物静默发布出去。
+import { readdir, readFile, mkdir, stat, lstat, copyFile, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 const wsRoot = process.argv[2];
@@ -28,6 +33,9 @@ async function* walk(dir) {
 }
 
 async function exists(p) { try { await stat(p); return true; } catch { return false; } }
+async function isSymlink(p) {
+  try { return (await lstat(p)).isSymbolicLink(); } catch { return false; }
+}
 
 async function copyDir(src, dst) {
   await mkdir(dst, { recursive: true });
@@ -51,15 +59,22 @@ for (const base of ['vendor', 'packages', 'apps', 'native']) {
   }
 }
 
-// 2. 补齐缺失的 workspace 包
+// 2. 补齐缺失的 workspace 包 + 把符号链接替换为真实副本
 let patched = 0;
 const noBuild = [];
 for (const pair of wsPkgs) {
   const name = pair[0], srcDir = pair[1];
   const short = name.slice('@deepseek-ai/'.length);
   const dstDir = join(target, short);
-  if (await exists(dstDir)) continue;
 
+  // 已存在：真实目录保留；符号链接/联结点 → 删除后重新生成真实副本（否则打包被跳过）
+  if (await exists(dstDir)) {
+    if (!(await isSymlink(dstDir))) continue;
+    console.log(`[patch] ${short} 是符号链接，替换为真实副本`);
+    await rm(dstDir, { recursive: true, force: true });
+  }
+
+  // 找 build 产物：先 ws 源码 lib，再 hoisted 根 node_modules
   let srcLib = join(srcDir, 'lib');
   let pkgSrc = srcDir;
   let viaHoisted = false;
