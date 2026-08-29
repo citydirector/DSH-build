@@ -153,6 +153,11 @@ jobs:
         shell: pwsh
         run: pnpm run build:official
 
+      # 跑 patch-peers 单测（独立 fixtures，不依赖上游构建产物；本地改动先过测试再打包）
+      - name: Run patch-peers tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-peers.test.mjs
+
       # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
       # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
       # devDependencies，靠 cordis 动态加载）；不加 auto-install-peers=false。
@@ -204,7 +209,7 @@ jobs:
       - name: Patch runtime deps (deploy 漏的 registry 依赖)
         shell: pwsh
         run: |
-          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame
+          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
 
       # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
