@@ -23,9 +23,14 @@ class DshUpdater
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
         int code = Run();
         // 停留窗口：update 双击运行时一闪而过，用户看不到信息。统一在退出前暂停。
-        Console.WriteLine();
-        Console.WriteLine("按任意键退出...");
-        try { Console.ReadKey(); } catch { }
+        // 例外：code==42 表示已启动后台 apply（robocopy + 自替换 update.exe），
+        // 此时要立即退出让出 update.exe 文件锁，否则 apply 覆盖自身会失败。
+        if (code != 42)
+        {
+            Console.WriteLine();
+            Console.WriteLine("按任意键退出...");
+            try { Console.ReadKey(); } catch { }
+        }
         return code;
     }
 
@@ -106,8 +111,17 @@ class DshUpdater
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("@echo off");
         sb.AppendLine("timeout /t 1 /nobreak >nul");
-        sb.AppendLine("robocopy \"" + newDir + "\" \"" + baseDir.TrimEnd('\\') + "\" /MIR /XD data /XF update.exe /NFL /NDL /NJH /NJS");
+        // 只镜像 app/node 两个子目录 + 复制几个顶层文件；不用整目录 /MIR，
+        // 避免删掉根目录里用户自己放的文件（如 update.exe 的备份）。
+        sb.AppendLine("robocopy \"" + newDir + "\\app\" \"" + baseDir.TrimEnd('\\') + "\\app\" /MIR /NFL /NDL /NJH /NJS");
         sb.AppendLine("if errorlevel 8 exit /b 1");
+        sb.AppendLine("robocopy \"" + newDir + "\\node\" \"" + baseDir.TrimEnd('\\') + "\\node\" /MIR /NFL /NDL /NJH /NJS");
+        sb.AppendLine("if errorlevel 8 exit /b 1");
+        sb.AppendLine("timeout /t 2 /nobreak >nul");
+        // 自替换 update.exe：此时旧进程已退出(返回42)，应可覆盖。
+        sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
+        sb.AppendLine("copy /y \"" + newDir + "\\dsh.exe\" \"" + baseDir.TrimEnd('\\') + "\\dsh.exe\"");
+        sb.AppendLine("copy /y \"" + newDir + "\\VERSION\" \"" + baseDir.TrimEnd('\\') + "\\VERSION\"");
         sb.AppendLine("exit /b 0");
         File.WriteAllText(applyCmd, sb.ToString());
 
@@ -117,8 +131,8 @@ class DshUpdater
         psi.UseShellExecute = true;
         Process.Start(psi);
 
-        Console.WriteLine("更新已开始，本窗口稍后关闭。");
-        return 0;
+        Console.WriteLine("更新已开始，后台正在应用，本窗口即将关闭。");
+        return 42;
     }
 
     // 选择更新通道：3 秒倒计时默认 main；按 2 选 dev，其余/超时选 main。
