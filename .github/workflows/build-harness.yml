@@ -280,6 +280,16 @@ jobs:
           path: _smoke.log
           retention-days: 3
 
+      # 默认 profile 是 harness boot 时生成的（无 version），而 package-inventory 插件要求
+      # 每个活跃条目所属包的 package.json 带非空 name+version；本地相对路径插件会解析到
+      # profile 自己，缺 version 即抛错。这里给打包的默认 profile 注入 version，防新装复发。
+      - name: Ensure default profile declares version
+        shell: pwsh
+        run: |
+          $pj = "portable/data/profiles/web/package.json"
+          if (-not (Test-Path $pj)) { Write-Host "默认 profile 不存在，跳过"; exit 0 }
+          node -e "const fs=require('fs');const p='portable/data/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.version){j.version='0.1.0';fs.writeFileSync(p,JSON.stringify(j,null,2))}else{console.log('already has version '+j.version)}"
+
       - name: Package portable zip
         shell: pwsh
         run: |
