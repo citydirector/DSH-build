@@ -54,10 +54,15 @@ class DshUpdater
         string tag = JsonValue(json, "tag_name");
         string latestSha = ExtractSha(json);
 
-        if (latestSha != "" && latestSha == current)
+        bool upToDate = latestSha != "" && latestSha == current;
+        if (upToDate)
         {
-            Console.WriteLine("已是最新版本（" + tag + "）。");
-            return 0;
+            bool force = HasForceArg() || AskForceUpdate(tag);
+            if (!force)
+            {
+                Console.WriteLine("已是最新版本（" + tag + "）。");
+                return 0;
+            }
         }
 
         string assetUrl = FindPortableAsset(json);
@@ -164,6 +169,64 @@ class DshUpdater
         catch
         {
             return "main";
+        }
+    }
+        // 是否以命令行参数强制更新（--force / -force / -f），用于脚本/非交互场景。
+    static bool HasForceArg()
+    {
+        try
+        {
+            foreach (string a in Environment.GetCommandLineArgs())
+            {
+                if (a == "--force" || a == "-force" || a == "-f") return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    // 已是最新版本时的强制更新提示：按 F 强制重新下载并覆盖，其它键/超时退出。
+    static bool AskForceUpdate(string tag)
+    {
+        try
+        {
+            Console.WriteLine();
+            Console.WriteLine("已是最新版本（" + tag + "）。");
+            Console.WriteLine("按 F 强制重新下载并覆盖更新；其它键或超时则退出。");
+            Console.Write("等待选择... 3 秒后退出");
+            DateTime start = DateTime.UtcNow;
+            int deadline = 3;
+            int last = 4;
+            while ((DateTime.UtcNow - start).TotalSeconds < deadline)
+            {
+                if (Console.KeyAvailable)
+                {
+                    ConsoleKeyInfo k = Console.ReadKey(true);
+                    if (k.KeyChar == 'F' || k.KeyChar == 'f')
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("已选择：强制更新。");
+                        return true;
+                    }
+                    Console.WriteLine();
+                    Console.WriteLine("已选择：退出。");
+                    return false;
+                }
+                int left = deadline - (int)(DateTime.UtcNow - start).TotalSeconds;
+                if (left != last)
+                {
+                    last = left;
+                    Console.Write("\r等待选择... " + left + " 秒后退出  ");
+                }
+                Thread.Sleep(100);
+            }
+            Console.WriteLine();
+            Console.WriteLine("超时，退出。");
+            return false;
+        }
+        catch
+        {
+            return false;
         }
     }
         static string HttpGet(string url)
