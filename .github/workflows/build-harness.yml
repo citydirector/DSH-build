@@ -211,6 +211,14 @@ jobs:
         run: |
           node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
 
+      # 应用本地修复：hasIntrinsicConstructor 的 Function.prototype.toString 精确比较
+      # 在真实浏览器（Firefox/Chrome）输出带换行导致全对象被判非 lossless JSON，
+      # 消息无法渲染。patch-native-code.mjs 归一化空白后比较（幂等；上游修复后自动跳过）。
+      - name: Apply native-code toString fix (browser lossless-JSON guard)
+        shell: pwsh
+        run: |
+          node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
+
       # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
         shell: pwsh
