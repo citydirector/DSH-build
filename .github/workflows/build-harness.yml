@@ -353,10 +353,15 @@ jobs:
           # 每日自动构建（dev 通道）也是 pre-release（不污染稳定 latest）。
           prerelease=""
           if [ "${{ github.ref_name }}" != "main" ] || [ "${{ github.event_name }}" = "schedule" ]; then prerelease="--prerelease"; fi
+          if [ "$RELEASE_TAG" = "dsh-master-latest" ]; then
+            NOTES="DSH 稳定版（dsh-master-latest）：历史会话与新版功能均正常，推荐使用。想尝鲜切到 dev 通道（dsh-dev-latest，每日构建 + 本地兼容性修复）。"
+          else
+            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复（解决新版 UI 历史会话消息无法显示）。稳定版请用 dsh-master-latest。"
+          fi
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "${{ github.ref_name == 'main' && 'DSH master' || 'DSH dev' }} ($(date +%Y%m%d))" \
-            --notes "Auto build ${{ github.ref_name }}@$(git rev-parse HEAD)" \
+            --notes "$NOTES Auto build ${{ github.ref_name }}@$(git rev-parse HEAD)" \
             $prerelease \
             artifacts/*/*.zip
 
