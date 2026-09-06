@@ -2,13 +2,13 @@
 
 对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 自动拉取、构建并发布的仓库。
 
-## 📢 公告（2026-09-06）
+## 公告（2026-09-06）
 
 - **稳定版**（`dsh-master-latest`）：当前为 **76fda72**，历史会话与新版功能均正常，推荐直接使用。
 - **dev 通道**（`dsh-dev-latest`）：每日自动构建上游最新代码，并附带**本地兼容性修复**（解决新版 UI 历史会话消息无法显示的问题），适合尝鲜与测试。
 - 稳定版不受每日构建影响；验证 dev 稳定后，才会手动发布到稳定版。
 
-> 用 `update.exe` 可切换更新通道（Settings → 更新，选 dev / main）。
+> `update.exe` 可切换更新通道（运行后键盘选择 dev / main）。
 
 ## 发布通道
 
@@ -29,15 +29,15 @@
 
 绿色便携，开箱即用：
 
-1. 下载 `dsh-portable-win64-*.zip`，解压到任意目录（不要放 C 盘程序目录）
+1. 下载 `dsh-portable-win64-*.zip`，解压到任意目录（不建议放 C 盘程序目录）
 2. 双击 `dsh.exe`，自动启动 Web UI 并打开浏览器（默认 `http://127.0.0.1:3080`）
-3. 首次使用进入 **Settings → Models** 填 DeepSeek API key
+3. 首次使用需填 DeepSeek API key
 
 **绿色承诺**：不写注册表、不写 C 盘用户目录、不写系统环境变量。所有数据（配置、会话、凭据）都在程序目录内的 `data/` 文件夹里，删除整个目录即彻底卸载。
 
 ### 原地更新
 
-双击 `update.exe`，自动检查最新版本并原地覆盖更新（保留 `data/` 用户数据）。更新前请先关闭 dsh。
+双击 `update.exe`，自动检查最新版本并原地覆盖更新（保留 `data/` 用户数据）。更新前请先关闭 dsh。备份放在 `data/backups/` 。当前及后面版本里 `update.exe` 执行更新时同时会自我更新。
 
 ### 目录结构
 
