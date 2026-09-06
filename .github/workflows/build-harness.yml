@@ -2,9 +2,10 @@ name: Build DSH
 
 # 分支策略：
 #   main —— 稳定发布。手动触发（workflow_dispatch）构建，发布到 dsh-master-latest（正式，固定稳定版）。
-#           每日自动构建（schedule）发布到 dsh-master-daily（带日期，不覆盖 latest）。
-#   dev  —— 预发布。手动触发直接构建（不检查上游），发布到 dsh-dev-latest（pre-release）。
-# 流程：有问题先推 dev → 手动触发构建 → 下载测试 → 没问题再手动触发 main 发布稳定版。
+#           自动构建已暂停（main 不跑 schedule），避免覆盖固定稳定版。
+#   dev  —— 预发布。每日自动构建（schedule 在默认分支 main 上，产物发布到 dsh-dev-latest）
+#           自动打本地补丁（patch-native-code.mjs）；也可手动触发。
+# 流程：每日自动构建 dev（带补丁）供测试；验证没问题后手动触发 main 发布稳定版。
 # 本地修复：portable/patch-native-code.mjs 在构建产物上应用 hasIntrinsicConstructor
 #           toString 空白归一化补丁（浏览器 lossless-JSON 守卫），幂等，上游修复后自动跳过。
 # 两个产物：
@@ -13,8 +14,8 @@ name: Build DSH
 # 关键：比较上游 SHA 用 checkout 之后的 git rev-parse HEAD，不要用 github.sha。
 
 on:
-  # 每日自动构建（仅 main 默认分支生效）：产物发布到 dsh-master-daily 每日标签，
-  # 不影响固定指向稳定版的 dsh-master-latest。
+  # 每日自动构建（schedule 只在默认分支 main 生效）：产物发布到 dsh-dev-latest（dev 通道），
+  # 自动打本地补丁；不影响固定指向稳定版的 dsh-master-latest。
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
@@ -332,8 +333,8 @@ jobs:
       - name: Remove old release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # main 手动触发 → dsh-master-latest（稳定）；main 每日 schedule → dsh-master-daily；dev → dsh-dev-latest
-          RELEASE_TAG: ${{ github.ref_name != 'main' && 'dsh-dev-latest' || (github.event_name == 'schedule' && 'dsh-master-daily' || 'dsh-master-latest') }}
+          # 每日 schedule 或 dev → dsh-dev-latest（预发布）；main 手动 → dsh-master-latest（稳定）
+          RELEASE_TAG: ${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
@@ -345,11 +346,11 @@ jobs:
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name != 'main' && 'dsh-dev-latest' || (github.event_name == 'schedule' && 'dsh-master-daily' || 'dsh-master-latest') }}
+          RELEASE_TAG: ${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}
         run: |
           # 注意：不要用空字符串作为 main 的 prerelease 标记——Actions 表达式里空字符串
           # 是 falsy，main 也会拿到 --prerelease。改用 bash 判断。
-          # daily 每日构建也是 pre-release（不污染稳定 latest）。
+          # 每日自动构建（dev 通道）也是 pre-release（不污染稳定 latest）。
           prerelease=""
           if [ "${{ github.ref_name }}" != "main" ] || [ "${{ github.event_name }}" = "schedule" ]; then prerelease="--prerelease"; fi
           gh release create "$RELEASE_TAG" \
@@ -367,7 +368,7 @@ jobs:
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: |
           sha="${{ needs.check.outputs.short_sha }}"
-          tag="${{ github.ref_name != 'main' && 'dsh-dev-latest' || (github.event_name == 'schedule' && 'dsh-master-daily' || 'dsh-master-latest') }}"
+          tag="${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}"
           url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
           jq -n --arg sha "$sha" --arg url "$url" \
             '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: "+$url)}' \
