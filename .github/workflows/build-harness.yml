@@ -1,18 +1,22 @@
 name: Build DSH
 
 # 分支策略：
-#   main —— 稳定发布。定时（cron，仅默认分支生效）拉取上游 deepseek-harness master，
-#           有新 commit 才构建，发布到 dsh-master-latest（正式）。
+#   main —— 稳定发布。手动触发构建，发布到 dsh-master-latest（正式）。
+#           自动构建已暂停（schedule 注释掉），避免 cron 覆盖回滚后的稳定产物。
 #   dev  —— 预发布。手动触发直接构建（不检查上游），发布到 dsh-dev-latest（pre-release）。
-# 流程：有问题先推 dev → 触发构建 → 下载测试 → 没问题再推 main。
+# 流程：有问题先推 dev → 触发构建 → 下载测试 → 没问题再推 main（手动触发）。
+# 本地修复：portable/patch-native-code.mjs 在构建产物上应用 hasIntrinsicConstructor
+#           toString 空白归一化补丁（浏览器 lossless-JSON 守卫），幂等，上游修复后自动跳过。
 # 两个产物：
 #   1. npm tarball 集合（ubuntu，官方 release:pack 链）
 #   2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe 启动器 + update.exe 更新器）
 # 关键：比较上游 SHA 用 checkout 之后的 git rev-parse HEAD，不要用 github.sha。
 
 on:
-  schedule:
-    - cron: "0 6 * * *"
+  # 自动构建已暂停：main/latest 回滚到稳定版后，cron 会每天覆盖回滚产物。
+  # 需要发布时手动触发 workflow_dispatch（dev 或 main）。
+  # schedule:
+  #   - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -210,6 +214,14 @@ jobs:
         shell: pwsh
         run: |
           node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
+
+      # 应用本地修复：hasIntrinsicConstructor 的 Function.prototype.toString 精确比较
+      # 在真实浏览器（Firefox/Chrome）输出带换行导致全对象被判非 lossless JSON，
+      # 消息无法渲染。patch-native-code.mjs 归一化空白后比较（幂等；上游修复后自动跳过）。
+      - name: Apply native-code toString fix (browser lossless-JSON guard)
+        shell: pwsh
+        run: |
+          node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
 
       # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
