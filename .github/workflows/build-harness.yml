@@ -153,7 +153,7 @@ jobs:
 
       - name: Install dependencies (hoisted)
         shell: pwsh
-        run: pnpm install --frozen-lockfile --config.node-linker=hoisted
+        run: pnpm install --frozen-lockfile --config.node-linker=hoisted --config.allowUnusedPatches=true
 
       - name: Build
         shell: pwsh
@@ -170,7 +170,11 @@ jobs:
       - name: Deploy portable runtime
         shell: pwsh
         run: |
+          # allowUnusedPatches：deploy 只取 @deepseek-ai/dsh 子集，上游 pnpm-workspace.yaml
+          # 里的 macOS/desktop 补丁（@electron/osx-sign 等）不在子集内，pnpm 会报
+          # ERR_PNPM_UNUSED_PATCH 使构建失败；该开关允许未使用的补丁（仅告警）。
           pnpm --filter @deepseek-ai/dsh deploy --legacy `
+            --config.allowUnusedPatches=true `
             --config.node-linker=hoisted `
             --config.link-workspace-packages=true `
             portable/app
