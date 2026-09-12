@@ -6,8 +6,9 @@ name: Build DSH
 #   dev  —— 预发布。每日自动构建（schedule 在默认分支 main 上，产物发布到 dsh-dev-latest）
 #           自动打本地补丁（patch-native-code.mjs）；也可手动触发。
 # 流程：每日自动构建 dev（带补丁）供测试；验证没问题后手动触发 main 发布稳定版。
-# 本地修复：portable/patch-native-code.mjs 在构建产物上应用 hasIntrinsicConstructor
-#           toString 空白归一化补丁（浏览器 lossless-JSON 守卫），幂等，上游修复后自动跳过。
+# 本地修复：portable/patch-native-code.mjs 在构建产物上应用两处补丁（幂等，上游修复后自动跳过）：
+#           1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
+#           2. session v2→v3 迁移白名单补历史 kind "instruction-hint"（旧 AGENTS.md 提示消息）
 # 两个产物：
 #   1. npm tarball 集合（ubuntu，官方 release:pack 链）
 #   2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe 启动器 + update.exe 更新器）
@@ -216,10 +217,12 @@ jobs:
         run: |
           node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
 
-      # 应用本地修复：hasIntrinsicConstructor 的 Function.prototype.toString 精确比较
-      # 在真实浏览器（Firefox/Chrome）输出带换行导致全对象被判非 lossless JSON，
-      # 消息无法渲染。patch-native-code.mjs 归一化空白后比较（幂等；上游修复后自动跳过）。
-      - name: Apply native-code toString fix (browser lossless-JSON guard)
+      # 应用本地修复（幂等；上游修复后自动跳过）：
+      # 1. hasIntrinsicConstructor 的 toString 精确比较在真实浏览器输出带换行，
+      #    导致全对象被判非 lossless JSON、消息无法渲染 → 归一化空白后比较。
+      # 2. session v2→v3 迁移白名单缺历史 kind "instruction-hint"，
+      #    含旧 AGENTS.md 提示消息的会话迁移报错、无法加载 → 补入白名单。
+      - name: Apply local harness fixes (lossless-JSON guard + v3 migration kind)
         shell: pwsh
         run: |
           node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai

@@ -1,12 +1,20 @@
 // patch-native-code.mjs <target-node_modules>
-// 修复上游 deepseek-harness 的一个前端 bug：hasIntrinsicConstructor 用
-// Function.prototype.toString 精确比较 native 函数字符串，但真实浏览器
-// (Firefox/Chrome) 输出带换行（"function Object() {\n    [native code]\n}"），
-// 而 Node.js 输出单行，导致浏览器端 walkJsonValue 把所有普通对象误判为
-// "非 lossless JSON"，assistant stream chunk 校验全部失败，消息无法渲染。
 //
-// 修复方式：比较前用 replace(/\s+/g, " ") 归一化空白（幂等；上游若修复后
-// 模式不存在则跳过，不会破坏产物）。
+// 修复上游 deepseek-harness 在构建产物上的两处缺陷（幂等；上游修复后模式不存在
+// 则自动跳过，不破坏产物）。
+//
+// 补丁 1：hasIntrinsicConstructor 的 native-code 字符串比较
+//   Function.prototype.toString 对 native 函数在真实浏览器 (Firefox/Chrome) 输出带换行
+//   （"function Object() {\n    [native code]\n}"），而 Node.js 输出单行，导致浏览器端
+//   walkJsonValue 把普通对象误判为"非 lossless JSON"，assistant stream chunk 校验全失败，
+//   消息无法渲染。修复：比较前 replace(/\s+/g, " ") 归一化空白。
+//
+// 补丁 2：session v2→v3 迁移的 SOURCE_KINDS 白名单缺少历史 kind "instruction-hint"
+//   旧版 DSH 会注入 AGENTS.md 提示消息（user/message，source.kind = "instruction-hint"）。
+//   新版把该 kind 改名为 "agent-instructions"，但 v2→v3 迁移的白名单没有纳入历史
+//   "instruction-hint"，于是含此类消息的历史会话在迁移时抛
+//   "cannot safely transform unclassified message source"，导致会话无法加载。
+//   修复：把 "instruction-hint" 加入白名单（无损放行，事件原样保留）。
 //
 // 用法: node patch-native-code.mjs <target-node_modules>
 import { readdir, readFile, writeFile } from 'node:fs/promises';
@@ -18,22 +26,33 @@ if (!target) {
   process.exit(2);
 }
 
-// 匹配: Function.prototype.toString.call(ARG) === `function NAME() { [native code] }`
-// 以及 intrinsicReflectApply(intrinsicFunctionToString, ARG, []) 变体。
-const PATTERNS = [
-  // 常规: Function.prototype.toString.call(x) === `...`
+// ── 补丁 1：native-code 字符串比较 ─────────────────────────────────────────
+const NATIVE_PATTERNS = [
   {
     re: /Function\.prototype\.toString\.call\(([^)]*)\)(\s*===\s*)(`[^`]*\[native code\][^`]*`)/g,
     repl: (m, arg, eq, tmpl) =>
       `Function.prototype.toString.call(${arg}).replace(/\\s+/g, " ")${eq}${tmpl}`,
   },
-  // 变体: intrinsicReflectApply(intrinsicFunctionToString, x, []) === `...`
   {
     re: /intrinsicReflectApply\(intrinsicFunctionToString,\s*([^,)]*),\s*\[\]\)(\s*===\s*)(`[^`]*\[native code\][^`]*`)/g,
     repl: (m, arg, eq, tmpl) =>
       `intrinsicReflectApply(intrinsicFunctionToString, ${arg}, []).replace(/\\s+/g, " ")${eq}${tmpl}`,
   },
 ];
+
+// ── 补丁 2：v2→v3 迁移白名单补 "instruction-hint" ─────────────────────────
+// 目标形态（构建产物）:
+//   const SOURCE_KINDS = new Set([
+//   	"user",
+//   	"plugin",
+//   ...
+function patchSourceKinds(raw) {
+  // 已含 instruction-hint：视为已修复
+  if (/SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}?"instruction-hint"/.test(raw)) return raw;
+  const re = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*\n(\s*)"user",)/;
+  if (!re.test(raw)) return raw;
+  return raw.replace(re, (_m, head, indent) => `${head}\n${indent}"instruction-hint",`);
+}
 
 async function* walk(dir) {
   let entries;
@@ -46,24 +65,26 @@ async function* walk(dir) {
   }
 }
 
-let scanned = 0, patched = 0, already = 0;
+let scanned = 0, nativePatched = 0, nativeAlready = 0, skPatched = 0, skAlready = 0;
 for await (const file of walk(target)) {
-  // 只处理包含 native code 校验的文件，避免全量扫描太慢
   const raw = await readFile(file, 'utf8');
-  if (!raw.includes('[native code]')) continue;
+  const hasNative = raw.includes('[native code]');
+  const hasSourceKinds = raw.includes('SOURCE_KINDS') && raw.includes('unclassified message source');
+  if (!hasNative && !hasSourceKinds) continue;
   scanned++;
   let out = raw;
-  for (const p of PATTERNS) out = out.replace(p.re, p.repl);
-  if (out !== raw) {
-    await writeFile(file, out, 'utf8');
-    patched++;
-    console.log(`patched: ${file.slice(target.length)}`);
+  if (hasNative) {
+    for (const p of NATIVE_PATTERNS) out = out.replace(p.re, p.repl);
+    if (out !== raw) { nativePatched++; console.log(`patched(native): ${file.slice(target.length)}`); }
+    else nativeAlready++;
   } else {
-    already++;
+    out = patchSourceKinds(out);
+    if (out !== raw) { skPatched++; console.log(`patched(source-kinds): ${file.slice(target.length)}`); }
+    else skAlready++;
   }
+  if (out !== raw) await writeFile(file, out, 'utf8');
 }
-console.log(`patch-native-code: scanned=${scanned} patched=${patched} already-fixed-or-absent=${already}`);
-if (patched === 0 && scanned === 0) {
-  // 上游若已修复，native code 模式可能消失；静默通过
-  console.log('patch-native-code: no native-code guards found (upstream already fixed?)');
+console.log(`patch-native-code: scanned=${scanned} native(patched=${nativePatched} already=${nativeAlready}) source-kinds(patched=${skPatched} already=${skAlready})`);
+if (scanned === 0) {
+  console.log('patch-native-code: no targets found (upstream already fixed?)');
 }
