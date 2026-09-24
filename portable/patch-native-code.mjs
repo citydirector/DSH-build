@@ -54,7 +54,11 @@ export const NATIVE_PATTERNS = [
   },
 ];
 
-export const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[\[\s\S\]{0,400}?"instruction-hint"/;
+// 注意 `\[[\s\S]{0,400}?` 这一段：7bfbd33 重构时被写成 `\[\[\s\S\]`（多转义了一层括号），
+// 那是一个匹配字面量 "[[<空白><非空白>]]" 的正则，对真实代码永远为 false —— 于是「已打过补丁」
+// 判定失效、补丁 2 不再幂等（对已打补丁的文件再插一行），unmatched 安全网也一起哑掉。
+// tests/patch-native-code.test.mjs 场景 4 现在会拦住这类回归。
+export const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}?"instruction-hint"/;
 
 /**
  * 该偏移是否位于一个 JS 字符串/模板字面量内部（只扫描注释、引号与反斜杠转义）。

@@ -6,6 +6,7 @@
 //   3) 历史损坏形态（字面量内部写成裸引号 → 提前终止字符串）：自愈
 //   4) 幂等：第二次运行零改动
 //   5) 仅注释里提到 '[native code]' 的第三方文件：不动它
+//   6) 补丁 2（SOURCE_KINDS 白名单）：首轮插入一次，次轮判为已打补丁且零改动
 // 用独立 fixture 构造（script 形态，便于用 vm.Script 直接校验），不依赖真实上游产物；可在 CI 里跑。
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -134,6 +135,45 @@ async function fixture(files) {
   const decoded = decodeFirstLiteral(fixed);
   ok(typeof decoded === 'string' && decoded.includes(PLAIN), '场景3: 解码后拿到等价注入');
   ok(r.out.includes('healed'), '场景3: 日志报告自愈 (healed)');
+  await rm(f, { recursive: true, force: true });
+}
+
+// ---- 场景 4：补丁 2（SOURCE_KINDS 白名单）：首轮插入，次轮判为已打补丁且零改动 ----
+// 这一场景专门钉住 ALREADY_SOURCE_KINDS：它曾被写成匹配字面量 "[[<空白><非空白>]]" 的正则，
+// 对真实代码恒为 false，于是次轮会再插一行 —— 断言「零改动 + 只出现一次 + already=1」即可拦住。
+{
+  const upstreamWhitelist = [
+    'const SOURCE_KINDS = new Set([',
+    '\t"user",',
+    '\t"plugin",',
+    '\t"model",',
+    ']);',
+    'function assertClassified(source) {',
+    '  if (!SOURCE_KINDS.has(source.kind)) throw new Error("cannot safely transform unclassified message source");',
+    '}',
+    ''
+  ].join(NL);
+  const f = await fixture({ 'session-format-v2-to-v3.js': upstreamWhitelist });
+
+  const r = await runScript(f);
+  ok(r.code === 0, '场景4: 运行成功 (exit 0)');
+  const patched = await readFile(join(f, 'session-format-v2-to-v3.js'), 'utf8');
+  ok(patched.includes('"instruction-hint"'), '场景4: 白名单补入 instruction-hint');
+  ok(patched.indexOf('"instruction-hint"') > patched.indexOf('"user"')
+    && patched.indexOf('"instruction-hint"') < patched.indexOf('"plugin"'),
+    '场景4: 插在 "user" 之后、"plugin" 之前');
+  ok((patched.match(/"instruction-hint"/g) || []).length === 1, '场景4: 只插入一次');
+  ok(parsesAsScript(patched), '场景4: 产物可解析');
+  ok(r.out.includes('source-kinds(patched=1 already=0)'), '场景4: 首轮报告 source-kinds patched=1 already=0');
+  ok(!r.out.includes('unmatched=1'), '场景4: 首轮没有未识别告警');
+
+  const r2 = await runScript(f);
+  const again = await readFile(join(f, 'session-format-v2-to-v3.js'), 'utf8');
+  ok(r2.code === 0, '场景4: 第二次运行成功 (exit 0)');
+  ok(again === patched, '场景4: 第二次运行零改动（幂等）');
+  ok((again.match(/"instruction-hint"/g) || []).length === 1, '场景4: 重复运行不会重复插入');
+  ok(r2.out.includes('source-kinds(patched=0 already=1)'), '场景4: 次轮报告 source-kinds patched=0 already=1');
+  ok(!r2.out.includes('unmatched=1'), '场景4: 次轮没有未识别告警');
   await rm(f, { recursive: true, force: true });
 }
 
