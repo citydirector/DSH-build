@@ -1,6 +1,8 @@
 // dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
-// 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH → 运行 node bin.js
+// 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH
+//       → 首次以新版本启动时跑一次会话代际迁移（app\migrate-sessions-v4.mjs）→ 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
+// 子命令：--migrate-sessions 只跑会话代际迁移、不启动 dsh（迁移有失败项后的手动重跑入口）。
 
 using System;
 using System.Diagnostics;
@@ -77,6 +79,19 @@ class DshLauncher
         string nodeDir = Path.Combine(baseDir, "node");
         Environment.SetEnvironmentVariable("PATH", nodeDir + ";" + Environment.GetEnvironmentVariable("PATH"));
 
+        // --migrate-sessions：只跑会话代际迁移、不启动 dsh（迁移失败后的手动重跑入口）
+        if (HasFlag(args, "--migrate-sessions"))
+        {
+            Console.WriteLine("仅执行本地会话代际迁移（不启动 dsh）。");
+            int migrateCode = RunSessionMigration(baseDir, nodeExe, dataDir, true);
+            if (migrateCode == 2) migrateCode = 0;
+            PauseBeforeExit();
+            return migrateCode;
+        }
+
+        // 首次以新版本启动时，一次性把本地 v2/v3 会话补迁移到 v4（失败不阻断启动）
+        RunSessionMigration(baseDir, nodeExe, dataDir, false);
+
         bool autoWeb = args.Length == 0;
 
         ProcessStartInfo psi = new ProcessStartInfo();
@@ -152,6 +167,111 @@ class DshLauncher
             PauseBeforeExit();
         }
         return p.ExitCode;
+    }
+
+    // ── 会话代际迁移（本地 v2/v3 会话 → v4）─────────────────────────────────
+    // 上游只在「写打开」（resume）时才把旧代际会话升级到当前代际，读取是只读的；所以从
+    // v3 构建升到 v4 构建后，得有人把本机全部会话补迁移一遍 —— 这里做，用户不必逐条 resume。
+    //
+    // 迁移器是随包分发的 app\migrate-sessions-v4.mjs（构建期由 portable/build-migrator.mjs
+    // 从上游 scripts/migrate-sessions-to-v4.ts 打包而来，用的是上游自己的迁移机器）。
+    // 迁移只「新增一份当前代际的 generation 文件」，历史 generation 原样保留 → 可回滚
+    // （删掉新写的 session.v4.jsonl.zstd 即可）。天然幂等：已是 v4 的会话只读打开。
+    //
+    // 幂等与静默：每个 VERSION 只跑一次。成功写 .done、失败写 .failed，两者都让后续启动
+    // 静默跳过 —— 否则一个坏会话会让每次启动都刷一遍同样的报错。失败不阻断启动（新版本
+    // 仍能按旧代际读取未升级的会话）；要重跑：dsh.exe --migrate-sessions。
+    // 紧急跳过：设 DSH_SKIP_SESSION_MIGRATION=1。
+    //
+    // 返回：0 成功；1 失败；2 跳过（无需迁移 / 已跑过 / 被禁用 / 缺迁移器）。
+    static int RunSessionMigration(string baseDir, string nodeExe, string dataDir, bool force)
+    {
+        string sessionsDir = Path.Combine(dataDir, "sessions");
+        string migrator = Path.Combine(baseDir, "app", "migrate-sessions-v4.mjs");
+
+        if (!force && Environment.GetEnvironmentVariable("DSH_SKIP_SESSION_MIGRATION") == "1")
+            return 2;
+        if (!Directory.Exists(sessionsDir))
+        {
+            if (force) Console.WriteLine("没有本地会话目录（" + sessionsDir + "），无需迁移。");
+            return 2;
+        }
+        if (!File.Exists(migrator))
+        {
+            if (force) Console.Error.WriteLine("未找到会话迁移器：" + migrator);
+            return 2;
+        }
+
+        string version = "";
+        string versionFile = Path.Combine(baseDir, "VERSION");
+        if (File.Exists(versionFile)) version = File.ReadAllText(versionFile).Trim();
+        if (version.Length == 0) version = "unknown";
+
+        string markerDir = Path.Combine(dataDir, ".migrations");
+        string doneMarker = Path.Combine(markerDir, "session-v4-" + version + ".done");
+        string failedMarker = Path.Combine(markerDir, "session-v4-" + version + ".failed");
+        if (!force && (File.Exists(doneMarker) || File.Exists(failedMarker)))
+            return 2;   // 本版本已处理过：静默跳过
+        try { Directory.CreateDirectory(markerDir); } catch { }
+
+        // 迁移器的文字日志与 JSON 摘要默认写系统临时目录；改成程序目录内，保持绿色。
+        // 只改子进程环境（不改本进程），免得 dsh 本体也把临时文件写进来。
+        string tmpDir = Path.Combine(markerDir, "tmp");
+        try { Directory.CreateDirectory(tmpDir); } catch { }
+
+        Console.WriteLine("首次以本版本启动：正在把本地会话格式升级到 v4（一次性，可回滚）...");
+        Console.WriteLine();
+
+        ProcessStartInfo psi = new ProcessStartInfo();
+        psi.FileName = nodeExe;
+        psi.Arguments = Quote(migrator) + " --sessions-dir " + Quote(sessionsDir);
+        psi.WorkingDirectory = Path.Combine(baseDir, "app");   // 让 @deepseek-ai/* 从 app\node_modules 解析
+        psi.UseShellExecute = false;
+        psi.EnvironmentVariables["DSH_BUILD_COMMIT"] = version;   // 代上游脚本里的 `git rev-parse HEAD`
+        psi.EnvironmentVariables["TEMP"] = tmpDir;
+        psi.EnvironmentVariables["TMP"] = tmpDir;
+
+        // 兜底超时：迁移器卡死时不能把启动器一起拖住（会话很多时正常也就几十秒）
+        int exit = 1;
+        try
+        {
+            Process proc = Process.Start(psi);
+            if (!proc.WaitForExit(15 * 60 * 1000))
+            {
+                try { proc.Kill(); } catch { }
+                Console.Error.WriteLine("会话迁移超时（15 分钟），已中止。");
+            }
+            else
+            {
+                exit = proc.ExitCode;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("会话迁移器启动失败：" + ex.Message);
+        }
+
+        Console.WriteLine();
+        if (exit == 0)
+        {
+            try { File.WriteAllText(doneMarker, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + " " + version); } catch { }
+            Console.WriteLine("本地会话已全部升级到 v4。历史代际文件仍保留，回滚只需删除 session.v4.jsonl.zstd。");
+            return 0;
+        }
+        try { File.WriteAllText(failedMarker, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + " " + version + " exit=" + exit); } catch { }
+        Console.Error.WriteLine("部分会话未能升级（迁移器退出码 " + exit + "）。本次继续启动；未升级的会话仍按旧代际可读。");
+        Console.Error.WriteLine("详情：" + tmpDir + " 下的 migration.log / summary.json");
+        Console.Error.WriteLine("排除原因后可手动重跑：dsh.exe --migrate-sessions");
+        return 1;
+    }
+
+    static bool HasFlag(string[] args, string flag)
+    {
+        foreach (string a in args)
+        {
+            if (a == flag) return true;
+        }
+        return false;
     }
 
     static int Fail(string msg)
