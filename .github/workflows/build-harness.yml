@@ -9,6 +9,10 @@ name: Build DSH
 # 本地修复：portable/patch-native-code.mjs 在构建产物上应用两处补丁（幂等，上游修复后自动跳过）：
 #           1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
 #           2. session v2→v3 迁移白名单补历史 kind "instruction-hint"（旧 AGENTS.md 提示消息）
+#           补丁 2 同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
+# 会话迁移：portable/build-migrator.mjs 把上游 scripts/migrate-sessions-to-v4.ts 打成
+#          portable/app/migrate-sessions-v4.mjs 随包分发；dsh.exe 启动时跑一次，
+#          把本地 v2/v3 会话补迁移到 v4（上游只在 resume 时才升级）。
 # 两个产物：
 #   1. npm tarball 集合（ubuntu，官方 release:pack 链）
 #   2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe 启动器 + update.exe 更新器）
@@ -32,6 +36,37 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # pnpm 版本的单一事实来源。
+  #
+  # 为什么不是 12.x：pnpm 12.6.0（含 12.0–12.6 全线）在**工作区**里跑 `pnpm run <script>` 或
+  # `pnpm exec` 必然失败 —— 它内部那次「依赖校验安装」会带上已被自己移除的旧选项
+  # `verify-deps-before-run-install`，然后被自己的严格选项校验拒绝：
+  #   [ERROR] Unknown option: 'verify-deps-before-run-install' ... pnpm help install
+  # 已本地最小复现（`pnpm-workspace.yaml` 里只要有 `packages:` 就会触发），且 `--config.*`
+  # 之类的外部覆盖救不了它（那次调用在 pnpm 进程内部，拿不到我们的命令行开关）。所以留在
+  # 11.x 末版 11.27.1 —— 它包含我们要的修复，也认得这个旧选项。
+  #
+  # 为什么要升：上游 package.json 把 packageManager 钉在 pnpm@11.7.0，而 11.7.0 在
+  # node-linker=hoisted 下有缺陷：把已构建的包复制到其它 hoisted 位置时整目录替换，连带删掉
+  # 并发兄弟的 _tmp_* 暂存目录（pnpm#12880，11.25.0 修复）。症状是
+  # ERR_PNPM_ENOENT rename '.../_tmp_...' -> '.../esbuild'；更糟的是替换本身是静默的，
+  # 成功的那几次也会删掉目标下嵌套的 node_modules。11.27.1 > 11.25.0，已含修复。
+  #
+  # 配套的两个动作：
+  #   1. 两个 job 都在 checkout 之后把 package.json 的 packageManager 对齐到本版本。
+  #      - pnpm/action-setup@v6 会拿 version 输入与 packageManager 对账，不一致直接报
+  #        "Multiple versions of pnpm specified"（v4 不检查），对齐后这一关自然过；
+  #      - 对齐后 pnpm 不会再「自动下载并回退」到 11.7.0（默认 pmOnFail=download）——
+  #        包括 `pnpm run` 内部触发的依赖校验安装，那次调用继承不到我们的命令行开关，
+  #        钉不满足时会悄悄跑回 11.7.0，把 hoisted 缺陷带回来。
+  #      - packageManager 只影响 pnpm 自身行为，不进任何产物：锁文件里没有
+  #        packageManagerDependencies，该字段也不随包发布。
+  #   2. 每次 pnpm 调用仍带 --pm-on-fail=ignore：它让 pnpm 不把 packageManagerDependencies
+  #      写进 pnpm-lock.yaml，免得 --frozen-lockfile 因锁文件被改写而失败。
+  #
+  # 命令位置也讲究：`pnpm run <script> --flag` 的 --flag 会转交给脚本，要作用于 pnpm 必须写在
+  # 脚本名之前。这里统一放在 `pnpm` 之后、子命令之前，最不容易踩坑。
+  PNPM_VERSION: "11.27.1"
 
 jobs:
   # -------- 检查上游是否有新提交 --------
@@ -42,7 +77,7 @@ jobs:
       sha: ${{ steps.check.outputs.sha }}
       short_sha: ${{ steps.check.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
@@ -89,36 +124,49 @@ jobs:
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.7.0
+      # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
+      - name: Align packageManager pin with the pnpm we run
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
+          node -p "require('./package.json').packageManager"
 
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
 
+      # 打印实际生效的 pnpm：它已与 packageManager 对齐，任何回退都会在这里现形
+      - name: Show toolchain versions
+        run: |
+          pnpm --version
+          node --version
+
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm --pm-on-fail=ignore install --frozen-lockfile
 
       - name: Build
-        run: pnpm run build:official
+        run: pnpm --pm-on-fail=ignore run build:official
 
       - name: Pack release tarballs
-        run: pnpm run release:pack --family dsh --out dist/npm
+        run: pnpm --pm-on-fail=ignore run release:pack --family dsh --out dist/npm
 
       - name: Archive npm tarballs
         shell: bash
         run: |
           zip -r "dsh-npm-tarballs-${{ needs.check.outputs.short_sha }}.zip" dist/npm
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dsh-npm-tarballs
           path: dsh-npm-tarballs-*.zip
@@ -130,34 +178,51 @@ jobs:
     if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
           fetch-depth: 0
 
-      # 二次 checkout 自己的仓库，取 portable/ 下的启动器与更新器源码
-      - uses: actions/checkout@v4
+      # 二次 checkout 自己的仓库，取 portable/ 下的启动器与更新器源码。
+      # 必须显式 ref：不带 ref 时 checkout 取的是仓库**默认分支**（main），
+      # 于是在非 main 分支上跑 CI 时，_build_repo 里是 main 的旧代码 —— 分支验证会失真。
+      - uses: actions/checkout@v7
         with:
           repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
           path: _build_repo
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.7.0
+      # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
+      - name: Align packageManager pin with the pnpm we run
+        shell: pwsh
+        run: |
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
+          node -p "require('./package.json').packageManager"
 
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
 
+      # 打印实际生效的 pnpm：它已与 packageManager 对齐，任何回退都会在这里现形
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          pnpm --version
+          node --version
+
       - name: Install dependencies (hoisted)
         shell: pwsh
-        run: pnpm install --frozen-lockfile --config.node-linker=hoisted --config.allowUnusedPatches=true
+        run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.node-linker=hoisted --config.allowUnusedPatches=true
 
       - name: Build
         shell: pwsh
-        run: pnpm run build:official
+        run: pnpm --pm-on-fail=ignore run build:official
 
       # 跑 patch-peers 单测（独立 fixtures，不依赖上游构建产物；本地改动先过测试再打包）
       - name: Run patch-peers tests
@@ -167,17 +232,29 @@ jobs:
       # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
       # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
       # devDependencies，靠 cordis 动态加载）；不加 auto-install-peers=false。
+      # 注意：pnpm deploy 要求目标目录为空（ERR_PNPM_DEPLOY_DIR_NOT_EMPTY），所以迁移器
+      # 的构建必须排在 deploy 之后。
       - name: Deploy portable runtime
         shell: pwsh
         run: |
           # allowUnusedPatches：deploy 只取 @deepseek-ai/dsh 子集，上游 pnpm-workspace.yaml
           # 里的 macOS/desktop 补丁（@electron/osx-sign 等）不在子集内，pnpm 会报
           # ERR_PNPM_UNUSED_PATCH 使构建失败；该开关允许未使用的补丁（仅告警）。
-          pnpm --filter @deepseek-ai/dsh deploy --legacy `
+          pnpm --pm-on-fail=ignore --filter @deepseek-ai/dsh deploy --legacy `
             --config.allowUnusedPatches=true `
             --config.node-linker=hoisted `
             --config.link-workspace-packages=true `
             portable/app
+
+      # 会话代际迁移器：把上游 scripts/migrate-sessions-to-v4.ts 打成随包分发的单文件 ESM
+      # （相对 import 内联，@deepseek-ai/* 保持 external 走 app/node_modules —— 迁移逻辑用的
+      # 仍是上游自己的机器，不是我们重写的副本）。dsh.exe 启动时跑一次，把本地 v2/v3 会话
+      # 补迁移到 v4。上游只在「写打开」(resume) 时才升级，不能指望用户逐条 resume。
+      # 必须排在 deploy 之后：pnpm deploy 要求目标目录为空。
+      - name: Build session migrator bundle
+        shell: pwsh
+        run: |
+          node _build_repo\portable\build-migrator.mjs . portable\app\migrate-sessions-v4.mjs
 
       # deploy 会系统性漏掉 workspace 包之间的 peer 依赖（auto-install-peers 对
       # deploy 无效）。patch-peers.mjs 遍历 workspace 全部 @deepseek-ai 包，把缺失的
@@ -226,10 +303,21 @@ jobs:
       #    导致全对象被判非 lossless JSON、消息无法渲染 → 归一化空白后比较。
       # 2. session v2→v3 迁移白名单缺历史 kind "instruction-hint"，
       #    含旧 AGENTS.md 提示消息的会话迁移报错、无法加载 → 补入白名单。
+      #    这条同时是 v4 批量迁移能 0 拒绝的前提。
       - name: Apply local harness fixes (lossless-JSON guard + v3 migration kind)
         shell: pwsh
         run: |
           node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
+
+      # 迁移器装载校验：--help 之前会先解析全部 import。这一步专门验证迁移器的 external
+      # 依赖（cordis / dsh-session / format-catalog / persistence-jsonl …）确实落在
+      # app/node_modules 里 —— 否则迁移器会在用户机器上启动即崩，而我们这里发现不了。
+      - name: Smoke test session migrator (imports resolve)
+        shell: pwsh
+        run: |
+          $env:DSH_BUILD_COMMIT = "${{ needs.check.outputs.sha }}"
+          node portable\app\migrate-sessions-v4.mjs --help
+          if ($LASTEXITCODE -ne 0) { throw "migrate-sessions-v4.mjs 装载失败（external 依赖未解析）" }
 
       # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
       - name: Copy node runtime
@@ -294,7 +382,7 @@ jobs:
       # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
       - name: Upload smoke log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-error
           path: _smoke.log
@@ -310,12 +398,13 @@ jobs:
           if (-not (Test-Path $pj)) { Write-Host "默认 profile 不存在，跳过"; exit 0 }
           node -e "const fs=require('fs');const p='portable/data/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.version){j.version='0.1.0';fs.writeFileSync(p,JSON.stringify(j,null,2))}else{console.log('already has version '+j.version)}"
 
+      # smoke 产物不能进发行包；_smoke*.log 在 portable/ 之外，无需额外排除
       - name: Package portable zip
         shell: pwsh
         run: |
           Compress-Archive -Path portable\* -DestinationPath "dsh-portable-win64-${{ needs.check.outputs.short_sha }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dsh-portable-win64
           path: dsh-portable-win64-*.zip
@@ -327,13 +416,13 @@ jobs:
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
           fetch-depth: 1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -363,7 +452,7 @@ jobs:
           if [ "$RELEASE_TAG" = "dsh-master-latest" ]; then
             NOTES="DSH 稳定版（dsh-master-latest）：历史会话与新版功能均正常，推荐使用。想尝鲜切到 dev 通道（dsh-dev-latest，每日构建 + 本地兼容性修复）。"
           else
-            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复（解决新版 UI 历史会话消息无法显示）。稳定版请用 dsh-master-latest。"
+            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复（解决新版 UI 历史会话消息无法显示）。首次以本版本启动时会自动把本地 v2/v3 会话迁移到 v4（一次性、可回滚）。稳定版请用 dsh-master-latest。"
           fi
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
@@ -397,7 +486,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download smoke error artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: smoke-error
           path: error-artifact
@@ -408,10 +497,17 @@ jobs:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: |
-          # 从 artifact 读 smoke 错误（run 内拉不到日志，只能靠 artifact 传递）
+          # 主来源：失败步骤的真实日志。以前只读 smoke artifact，install/deploy 阶段失败时
+          # _smoke.log 根本不存在，通知里的「错误摘要」永远是空的，等于没通知。
           err=""
+          err=$(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null \
+                | sed 's/\x1b\[[0-9;]*m//g' \
+                | grep -aE "ERR_PNPM|ERR_|Cannot find|Cannot resolve|##\[error\]|throw|failed" \
+                | tail -20 || true)
+          # smoke 失败时 _smoke.log 里的错误更精确，覆盖上面的摘要
           if [ -s error-artifact/_smoke.log ]; then
-            err=$(grep -iE "error|cannot find|cannot resolve|not found|throw|ERR_" error-artifact/_smoke.log | head -20 || true)
+            smoke=$(grep -iE "error|cannot find|cannot resolve|not found|throw|ERR_" error-artifact/_smoke.log | head -20 || true)
+            if [ -n "$smoke" ]; then err="$smoke"; fi
           fi
           jq -n \
             --arg sha "${{ needs.check.outputs.short_sha }}" \
