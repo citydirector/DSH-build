@@ -20,6 +20,19 @@
 //     字面量内部： .replace(/\\s+/g, \" \")
 //   两者在被外层字符串解码后完全等价（反斜杠与引号都多转义一层）。
 //
+// 补丁 2：session 迁移的 SOURCE_KINDS 白名单缺少历史 kind "instruction-hint"
+//   改动点只有一处：@deepseek-ai/dsh-session-format-v2-to-v3 的 SOURCE_KINDS 白名单
+//   （v3→v4 以及更早的 v0→v1 / v1→v2 都没有这类白名单 + "unclassified message
+//   source" 拒绝）；但覆盖面是**整条 v2→v3→v4 链**：catalog 用 migrations 图 +
+//   currentVersion: 4 链式推进，v2 会话必须先过 v2→v3 才可能到 v4，所以这一处就是
+//   批量迁移器（portable/app/migrate-sessions-v4.mjs）能 0 拒绝的前置条件。
+//   旧版 DSH 注入的 AGENTS.md 提示消息 source.kind = "instruction-hint"，新版改名成
+//   "agent-instructions"；历史 kind 不在白名单里时迁移会抛
+//   "cannot safely transform unclassified message source"（会话直接读不出来）。
+//   修复：把 "instruction-hint" 插到白名单的 "user" 之后（无损放行，事件原样保留）。
+//   上游若把白名单挪走 / 改名，ALREADY_SOURCE_KINDS 与 unmatched 兜底会告警，
+//   而不是静默跳过。
+//
 // 用法: node patch-native-code.mjs <target-node_modules>
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -113,7 +126,7 @@ export function patchNative(raw) {
   return { out, patched, already, brokenRepaired, literal, reverted: false };
 }
 
-/** 补丁 2：v2→v3 迁移白名单补 "instruction-hint"。 */
+/** 补丁 2：往 v2→v3 的白名单补 "instruction-hint"，打通 v2→v3→v4 整条链（详见文件头）。 */
 export function patchSourceKinds(raw) {
   if (ALREADY_SOURCE_KINDS.test(raw)) return raw;
   const re = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*\n(\s*)"user",)/;
