@@ -4,12 +4,27 @@
 
 ## 公告（2026-09-24）
 
-- **稳定版**（`dsh-master-latest`）：当前为 **76fda72**（上游 09-03）。⚠️ 它**没有 v3/v4 会话编解码**，装它会读不出本机已有的 v3 会话 —— 要更新只能走 dev 通道。
-- **dev 通道**（`dsh-dev-latest`）：每日自动构建上游最新代码（含会话格式 v4、profile 设置、声明式 Agent 预设），并附带**本地兼容性修复**。
-- **首次以 dev 版启动时会自动把本地 v2/v3 会话迁移到 v4**（一次性、可回滚），见下文。
-- 稳定版不受每日构建影响；验证 dev 稳定后，才会手动发布到稳定版。
+- **两个通道现在都跑上游 `477b4f4`（0.1.7-rc.2）**：`dsh-master-latest`（稳定，正式）由 **main** 分支发出；`dsh-dev-latest`（pre-release）由 **dev** 分支每日跟随上游。两者只差"上游提交从哪来"，胶水完全一致。
+- **分支 = 通道**（2026-09-24 重构，见下节）：`dev` 是默认分支、每日自动跟随上游；`main` 只在晋升时动。
+- **首次以新版本启动时会自动把本地 v2/v3 会话迁移到 v4**（一次性、可回滚），见下文。
 
 > `update.exe` 可切换更新通道（运行后键盘选择 dev / main）。
+
+## 分支与通道（2026-09-24 起）
+
+| | **`dev`（默认分支）** | **`main`** |
+|---|---|---|
+| 定位 | 跟随上游的预发布通道 | 你验证过的稳定通道 |
+| 触发 | 每日 06:00 UTC（`schedule`）+ 手动 | main 被推进时（`push`，路径过滤）+ 手动 |
+| 目标上游 | `master` 头（上游一有新提交就跟上） | **`portable/upstream.pin` 里钉住的提交** |
+| 发布到 | `dsh-dev-latest`（pre-release） | `dsh-master-latest`（正式） |
+| 何时写 pin | 每次成功发布后自动推进 | 只在你晋升时更新 |
+
+- **通道由你所在的分支决定**，不再由事件类型猜：在 dev 上跑（含每日任务）→ dev 通道；在 main 上跑 → 稳定通道；临时分支上手动 dispatch 也走 dev 通道（验证用，不碰稳定标签）。
+- **`portable/upstream.pin` 是一行上游 commit sha**，含义是"本通道当前产物对应的上游提交"。它让 `dsh-master-latest` **可复现**——随时能重建出同一个提交的产物，而不是"当时的上游 HEAD 是什么就是什么"。dev 侧的 pin 只在上传成功后推进，所以它不会出现"pin 指向 A、线上是 B"的错位。
+- **跳过判定**：自动触发时，若目标提交与上次发布相同就跳过（省 CI）；**手动触发一律构建**。
+- **晋升**：dev 验证 OK → `gh pr create --base main --head dev` → 合并 → main 的 push 自动重建稳定版。PR 里只有胶水 + 一行 pin，可 review。
+- ⚠️ **别把 pin 往回退到 0.1.7 之前的提交**：那些版本没有 v3/v4 会话编解码，会把已迁移到 v4 的会话读成"未知的新代际"。
 
 ### 构建链更新（2026-09-24）
 
@@ -23,9 +38,12 @@
 
 ## 发布通道
 
-- **稳定版 `dsh-master-latest`**：手动发布，当前固定为 76fda72。
-- **每日 `dsh-dev-latest`**（pre-release）：每天 UTC 06:00 自动构建上游最新代码并打本地兼容性补丁。
-- 所有产物发布到 [Releases](https://github.com/citydirector/DSH-build/releases)。
+只保留两个 Release 标签，全部产物在 [Releases](https://github.com/citydirector/DSH-build/releases)：
+
+- **`dsh-master-latest`**（正式）：由 `main` 分支发出，上游提交钉在 `portable/upstream.pin`，**可复现**。
+- **`dsh-dev-latest`**（pre-release）：由 `dev` 分支每日自动构建上游最新代码并打本地兼容性补丁。
+
+两者的区别只是"上游提交从哪来"，`portable/` 下的胶水（补丁、迁移器、启动器）逐字节相同。
 
 ## 产物
 
@@ -88,15 +106,23 @@ npm i ./dist/npm/deepseek-ai-dsh-0.1.0-rc.5.tgz
 
 ## 手动触发
 
-仓库 Actions 页面 → **Build DSH** → `Run workflow`，立即构建（dev 分支默认；main 分支手动发布稳定版）。
+Actions 页面 → **Build DSH** → `Run workflow`，**在哪个分支上点就是哪个通道**（手动触发一律构建，不跳过）：
+
+- 在 `dev` 上点 → 构建上游最新，发 `dsh-dev-latest`
+- 在 `main` 上点 → 构建 `portable/upstream.pin` 钉的那个提交，发 `dsh-master-latest`
+- 在临时分支上点 → 按 dev 通道跑（验证流水线改动用，不碰稳定标签）
 
 ## Workflow 说明
 
-- `.github/workflows/build-harness.yml`：`check`（查上游新提交）→ `npm`（ubuntu 出 tarball）+ `portable`（windows 出便携包）→ `release`（合并发布）
-- 每日自动构建发布到 `dsh-dev-latest`（pre-release）；main 手动触发发布到 `dsh-master-latest`（稳定版）
+`.github/workflows/build-harness.yml`：`check`（解析目标上游提交 + 跳过判定）→ `npm`（ubuntu 出 tarball）+ `portable`（windows 出便携包）→ `release`（合并发布；dev 通道顺带推进 pin）→ `notify-failure`（独立 job，任一失败都通知）
+
+- `check` 用 `github.ref_name` 定通道：`main` → 目标 = `portable/upstream.pin`；其它 → 目标 = 上游 `master` 头
+- 下游所有 job 都用 `check` 解析出的**那个**上游 sha 检出上游，不用 `master`——否则 check 与真正构建的可能不是同一个提交
+- Release body 末尾有机器可读三行（`upstream:` / `channel:` / `built-from:`），跳过判定读的就是 `upstream:` 行
+- dev 发布成功后自动提交 `chore(dev): track upstream <sha>`（`GITHUB_TOKEN` 推送不会再触发 workflow，不会自我循环）
 - pnpm 版本由 workflow 顶层 `PNPM_VERSION` 单一控制（当前 11.27.1）；每次调用都带 `--pm-on-fail=ignore`，并且 checkout 后会把上游 `packageManager` 对齐到该版本（不这么做会被静默回退到 11.7.0）
 - 便携包用 `pnpm --filter @deepseek-ai/dsh deploy --legacy --config.node-linker=hoisted` 链（**不加** `--prod`：dsh 运行时插件在 devDependencies，靠 cordis 动态加载），再用 `patch-peers.mjs` / `patch-dep.mjs` 补齐 deploy 系统性漏掉的依赖，最后跑真 boot 冒烟测试
-- 构建产物自动打本地兼容性补丁（`portable/patch-native-code.mjs`，幂等，上游修复后自动跳过）：lossless-JSON 守卫 + v2→v3 迁移 kind 白名单
+- 构建产物自动打本地兼容性补丁（`portable/patch-native-code.mjs`，幂等、可自愈）：lossless-JSON 守卫（含字面量内转义）+ 迁移白名单 kind；单测在 `tests/patch-native-code.test.mjs`，CI 里跑
 - 会话迁移器由 `portable/build-migrator.mjs` 在构建期把上游 `scripts/migrate-sessions-to-v4.ts` 打成单文件 ESM（相对 import 内联、`@deepseek-ai/*` 保持 external），随包分发
 - 启动器/更新器源码在 `portable/`，workflow 内用 `.NET Framework 4.8` 的 `csc` 编译
 - 通知使用 Server3（secrets：`SC3_UID` / `SC3_SENDKEY`），未配置则静默跳过

@@ -1,36 +1,58 @@
 name: Build DSH
 
-# 分支策略：
-#   main —— 稳定发布。手动触发（workflow_dispatch）构建，发布到 dsh-master-latest（正式，固定稳定版）。
-#           自动构建已暂停（main 不跑 schedule），避免覆盖固定稳定版。
-#   dev  —— 预发布。每日自动构建（schedule 在默认分支 main 上，产物发布到 dsh-dev-latest）
-#           自动打本地补丁（patch-native-code.mjs）；也可手动触发。
-# 流程：每日自动构建 dev（带补丁）供测试；验证没问题后手动触发 main 发布稳定版。
-# 本地修复：portable/patch-native-code.mjs 在构建产物上应用两处补丁（幂等，上游修复后自动跳过）：
-#           1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
-#           2. session 迁移白名单补历史 kind "instruction-hint"（旧 AGENTS.md 提示消息）：
-#              改动点只有 v2→v3 的白名单（v3→v4 无此白名单），覆盖面是整条 v2→v3→v4 链
-#              —— v2 会话必须先过 v2→v3，故它同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
-# 会话迁移：portable/build-migrator.mjs 把上游 scripts/migrate-sessions-to-v4.ts 打成
-#          portable/app/migrate-sessions-v4.mjs 随包分发；dsh.exe 启动时跑一次，
-#          把本地 v2/v3 会话补迁移到 v4（上游只在 resume 时才升级）。
-# 两个产物：
-#   1. npm tarball 集合（ubuntu，官方 release:pack 链）
-#   2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe 启动器 + update.exe 更新器）
-# 关键：比较上游 SHA 用 checkout 之后的 git rev-parse HEAD，不要用 github.sha。
+# ── 分支 = 通道 ─────────────────────────────────────────────────────────────
+#   dev（默认分支）—— 跟随上游最新的预发布通道
+#     · schedule（每天 06:00 UTC，GitHub 的 schedule **只在该仓库的默认分支上触发**）
+#     · 目标上游 = master 头；发布到 dsh-dev-latest（pre-release）
+#     · 发布成功后把这次的上游提交写进 portable/upstream.pin 并提交（见下）
+#   main —— 稳定通道
+#     · 只在 main 被推进时触发（push，路径过滤）或手动 dispatch
+#     · 目标上游 = portable/upstream.pin 里钉住的那个提交 —— 只有晋升时才动
+#     · 发布到 dsh-master-latest（正式）
+#   通道由**你所在的分支**决定，不再由事件类型猜测：
+#     在 dev 上（含每日 schedule）→ dsh-dev-latest；在 main 上 → dsh-master-latest；
+#     在临时分支上手动 dispatch → 按 dev 通道跑（用于验证，不会碰稳定标签）。
+#
+# ── 上游 pin：稳定通道可复现 ───────────────────────────────────────────────
+#   portable/upstream.pin 是一行 40 位上游 commit sha，含义是「本通道当前产物对应的上游提交」。
+#   · dev：每次成功发布后才推进到当天的上游 master 头 —— 所以 pin == 已发布的产物，
+#          不会出现「pin 指向 A、线上是 B」的错位；它同时是下次 schedule 的跳过判据。
+#   · main：只在晋升（把 dev 合过来）时更新 —— 于是 dsh-master-latest 永远是某个**确定的**
+#          上游提交的产物，随时可以重建；不再出现「当时的上游 HEAD 是什么就是什么」。
+#   跳过判定只对自动触发（schedule / push）生效；手动 dispatch 一律构建。
+#
+# ── 晋升路径 ───────────────────────────────────────────────────────────────
+#   dev 验证 OK → gh pr create --base main --head dev → 合并 → main 上的 push 自动重建稳定版
+#   （diff 只有胶水 + 一行 pin，可 review）。
+#
+# ── 本地修复与产物 ─────────────────────────────────────────────────────────
+#   本地补丁：portable/patch-native-code.mjs 在构建产物上应用两处（幂等、可自愈，上游修了自动跳过）：
+#     1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
+#     2. session 迁移白名单补历史 kind "instruction-hint"：改动点只有 v2→v3 的白名单
+#        （v3→v4 无此白名单），覆盖面是整条 v2→v3→v4 链 —— v2 会话必须先过 v2→v3，
+#        故它同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
+#   会话迁移：portable/build-migrator.mjs 把上游 scripts/migrate-sessions-to-v4.ts 打成
+#            portable/app/migrate-sessions-v4.mjs 随包分发；dsh.exe 启动时跑一次，
+#            把本地 v2/v3 会话补迁移到 v4（上游只在 resume 时才升级）。
+#   两个产物：
+#     1. npm tarball 集合（ubuntu，官方 release:pack 链）
+#     2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe + update.exe）
+#   关键：下游所有 job 都用 check 解析出的**那个**上游 sha 检出上游，不用 master ——
+#         否则 check 与真正构建的提交可能不是同一个（上游在 run 期间前进了）。
 
 on:
-  # 每日自动构建（schedule 只在默认分支 main 生效）：产物发布到 dsh-dev-latest（dev 通道），
-  # 自动打本地补丁；不影响固定指向稳定版的 dsh-master-latest。
   schedule:
+    # 只会在默认分支（dev）上触发 —— 这也是 main 不会自动发稳定版的原因。
     - cron: "0 6 * * *"
-  workflow_dispatch:
-    inputs:
-      force:
-        description: "Force build even if upstream has no new commits"
-        required: false
-        default: false
-        type: boolean
+  push:
+    branches: [main]
+    # 只有会改变产物的路径才重建稳定版；纯文档改动不惊动它。
+    paths:
+      - "portable/**"
+      - "tests/**"
+      - ".github/workflows/**"
+  # 手动触发一律构建（不跳过）：临时分支上跑也走 dev 通道，用来验证流水线。
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -54,7 +76,7 @@ env:
   # 成功的那几次也会删掉目标下嵌套的 node_modules。11.27.1 > 11.25.0，已含修复。
   #
   # 配套的两个动作：
-  #   1. 两个 job 都在 checkout 之后把 package.json 的 packageManager 对齐到本版本。
+  #   1. 两个构建 job 都在 checkout 之后把 package.json 的 packageManager 对齐到本版本。
   #      - pnpm/action-setup@v6 会拿 version 输入与 packageManager 对账，不一致直接报
   #        "Multiple versions of pnpm specified"（v4 不检查），对齐后这一关自然过；
   #      - 对齐后 pnpm 不会再「自动下载并回退」到 11.7.0（默认 pmOnFail=download）——
@@ -70,53 +92,70 @@ env:
   PNPM_VERSION: "11.27.1"
 
 jobs:
-  # -------- 检查上游是否有新提交 --------
+  # -------- 解析目标上游提交 + 跳过判定 --------
   check:
     runs-on: ubuntu-latest
     outputs:
-      skip: ${{ steps.check.outputs.skip }}
-      sha: ${{ steps.check.outputs.sha }}
-      short_sha: ${{ steps.check.outputs.short_sha }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      skip: ${{ steps.resolve.outputs.skip }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      short_sha: ${{ steps.resolve.outputs.short_sha }}
     steps:
+      # dev 通道要读上游 master 头，所以这里检出的就是上游仓库
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
           fetch-depth: 0
 
-      - name: Check if upstream has new commits
-        id: check
+      - name: Resolve target upstream commit
+        id: resolve
         shell: bash
         run: |
-          currentSha="$(git rev-parse HEAD)"
-          shortSha="${currentSha:0:7}"
-          echo "sha=$currentSha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$shortSha" >> "$GITHUB_OUTPUT"
-          # 非 main 分支（dev 等）：不检查上游，直接构建，发布到对应的 pre 标签
-          if [ "${{ github.ref_name }}" != "main" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "🔨 ${{ github.ref_name }} 分支构建（无上游检查）"
-            exit 0
-          fi
-          # main 分支：手动触发时勾选 force 可强制构建（无视上游是否有新提交）
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force }}" = "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "🔨 强制构建 (force=true)"
-            exit 0
-          fi
-          apiUrl="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/dsh-master-latest"
-          if body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" "$apiUrl" | jq -r .body)"; then
-            lastSha="$(printf '%s' "$body" | sed 's/.*@//')"
-            if [ "$lastSha" = "$currentSha" ]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "✅ 上游 master 无新提交 ($currentSha)，跳过构建"
-            else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              echo "📦 上游有更新: $lastSha → $currentSha"
+          channel=dev
+          tag=dsh-dev-latest
+          if [ "${{ github.ref_name }}" = "main" ]; then channel=main; tag=dsh-master-latest; fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if [ "$channel" = "main" ]; then
+            # 稳定通道：钉在 portable/upstream.pin 上（用 API 读，免得为读一行做一次 checkout）
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/portable/upstream.pin?ref=${{ github.sha }}" \
+                   --jq '.content' | base64 -d | tr -d '[:space:]')"
+            if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+              echo "::error::portable/upstream.pin 不是 40 位 commit sha：'$sha'"
+              exit 1
             fi
+            if ! gh api "repos/deepseek-ai/deepseek-harness/commits/$sha" >/dev/null 2>&1; then
+              echo "::error::upstream.pin 指向的提交在上游不存在：$sha"
+              exit 1
+            fi
+            echo "🎯 main 通道：目标 = pin $sha"
+          else
+            # dev 通道：跟随上游 master 头
+            sha="$(git rev-parse HEAD)"
+            echo "🎯 dev 通道：目标 = 上游 master 头 $sha"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+          # 跳过判定：手动 dispatch 一律构建；schedule / push 在「目标 == 上次发布的上游提交」时跳过。
+          # 上次发布的提交从 Release body 的 `upstream: <sha>` 行读（旧格式没有这行 → 不跳过）。
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "🔨 手动触发：直接构建"
+            exit 0
+          fi
+          body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+                  "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$tag" | jq -r .body || true)"
+          last="$(printf '%s' "$body" | sed -n 's/^upstream: \([0-9a-f]\{40\}\).*/\1/p')"
+          if [ -n "$last" ] && [ "$last" = "$sha" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "✅ $tag 已经是这个提交（$sha），跳过"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "🆕 首次构建或查询出错，将执行构建"
+            echo "📦 $tag: ${last:-<无记录>} → $sha"
           fi
 
   # -------- npm tarball 集合（ubuntu） --------
@@ -128,7 +167,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: master
+          ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
 
       # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
@@ -182,12 +221,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: master
+          ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
 
       # 二次 checkout 自己的仓库，取 portable/ 下的启动器与更新器源码。
-      # 必须显式 ref：不带 ref 时 checkout 取的是仓库**默认分支**（main），
-      # 于是在非 main 分支上跑 CI 时，_build_repo 里是 main 的旧代码 —— 分支验证会失真。
+      # 必须显式 ref：不带 ref 时 checkout 取的是仓库**默认分支**（现在是 dev），
+      # 于是在 main 上跑 CI 时，_build_repo 里会是 dev 的胶水 —— 分支验证会失真。
       - uses: actions/checkout@v7
         with:
           repository: citydirector/DSH-build
@@ -303,9 +342,10 @@ jobs:
         run: |
           node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
 
-      # 应用本地修复（幂等；上游修复后自动跳过）：
+      # 应用本地修复（幂等、可自愈；上游修复后自动跳过）：
       # 1. hasIntrinsicConstructor 的 toString 精确比较在真实浏览器输出带换行，
       #    导致全对象被判非 lossless JSON、消息无法渲染 → 归一化空白后比较。
+      #    （同一模式还以内联字符串字面量的形态出现在 dsh-workflow-ptc 里，按上下文多转义一层。）
       # 2. session v2→v3 迁移白名单缺历史 kind "instruction-hint"，
       #    含旧 AGENTS.md 提示消息的会话迁移报错、无法加载 → 补入白名单。
       #    这条同时是 v4 批量迁移能 0 拒绝的前提。
@@ -423,9 +463,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: deepseek-ai/deepseek-harness
-          ref: master
-          fetch-depth: 1
+          repository: citydirector/DSH-build
+          ref: ${{ github.ref_name }}
 
       - uses: actions/download-artifact@v8
         with:
@@ -433,9 +472,7 @@ jobs:
 
       - name: Remove old release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 每日 schedule 或 dev → dsh-dev-latest（预发布）；main 手动 → dsh-master-latest（稳定）
-          RELEASE_TAG: ${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
@@ -446,25 +483,46 @@ jobs:
 
       - name: Create Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+          CHANNEL: ${{ needs.check.outputs.channel }}
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+          GLUE_SHA: ${{ github.sha }}
         run: |
-          # 注意：不要用空字符串作为 main 的 prerelease 标记——Actions 表达式里空字符串
-          # 是 falsy，main 也会拿到 --prerelease。改用 bash 判断。
-          # 每日自动构建（dev 通道）也是 pre-release（不污染稳定 latest）。
+          # dev 是 pre-release（不污染稳定 latest）；main 是正式版。
           prerelease=""
-          if [ "${{ github.ref_name }}" != "main" ] || [ "${{ github.event_name }}" = "schedule" ]; then prerelease="--prerelease"; fi
-          if [ "$RELEASE_TAG" = "dsh-master-latest" ]; then
-            NOTES="DSH 稳定版（dsh-master-latest）：历史会话与新版功能均正常，推荐使用。想尝鲜切到 dev 通道（dsh-dev-latest，每日构建 + 本地兼容性修复）。"
+          if [ "$CHANNEL" = "dev" ]; then prerelease="--prerelease"; fi
+          if [ "$CHANNEL" = "main" ]; then
+            TITLE="DSH master"
+            NOTES="DSH 稳定版（dsh-master-latest）：由 main 分支发出，上游提交钉在 portable/upstream.pin（可复现）。历史会话与新版功能均正常，推荐使用。想尝鲜切到 dev 通道（dsh-dev-latest，每日跟随上游）。"
           else
-            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复（解决新版 UI 历史会话消息无法显示）。首次以本版本启动时会自动把本地 v2/v3 会话迁移到 v4（一次性、可回滚）。稳定版请用 dsh-master-latest。"
+            TITLE="DSH dev"
+            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复。首次以本版本启动时会自动把本地 v2/v3 会话迁移到 v4（一次性、可回滚）。稳定版请用 dsh-master-latest。"
           fi
+          # 机器可读的尾部：check 的跳过判定读的就是这里的 `upstream:` 行，别再改格式。
+          NOTES="$(printf '%s\n\nupstream: %s\nchannel: %s\nbuilt-from: %s' "$NOTES" "$UPSTREAM_SHA" "$CHANNEL" "$GLUE_SHA")"
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "${{ github.ref_name == 'main' && 'DSH master' || 'DSH dev' }} ($(date +%Y%m%d))" \
-            --notes "$NOTES Auto build ${{ github.ref_name }}@$(git rev-parse HEAD)" \
+            --title "$TITLE ($(date +%Y%m%d))" \
+            --notes "$NOTES" \
             $prerelease \
             artifacts/*/*.zip
+
+      # dev 通道：发布成功后才推进 pin，让 pin 永远等于「dev 通道当前产物对应的上游提交」。
+      # 它既是 git log dev 上「跟到哪儿了」的记录，也是下一次 schedule 的跳过判据。
+      # （用 GITHUB_TOKEN 推送不会再触发 workflow，不会自我循环。）
+      - name: Advance the upstream pin (dev only)
+        if: needs.check.outputs.channel == 'dev'
+        run: |
+          if [ "$(cat portable/upstream.pin)" = "${{ needs.check.outputs.sha }}" ]; then
+            echo "pin 已指向本次构建的上游提交，无需提交"
+            exit 0
+          fi
+          echo "${{ needs.check.outputs.sha }}" > portable/upstream.pin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add portable/upstream.pin
+          git commit -m "chore(dev): track upstream ${{ needs.check.outputs.short_sha }}"
+          git push
 
       # -------- 通知（成功） --------
       - name: Send notification (success)
@@ -472,21 +530,23 @@ jobs:
         env:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
         run: |
           sha="${{ needs.check.outputs.short_sha }}"
-          tag="${{ (github.event_name == 'schedule' || github.ref_name != 'main') && 'dsh-dev-latest' || 'dsh-master-latest' }}"
-          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           jq -n --arg sha "$sha" --arg url "$url" \
             '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: "+$url)}' \
             > /tmp/body.json
           curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
             "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
 
-  # -------- 失败通知（独立 job：check/npm/portable 任一失败都触发） --------
+  # -------- 失败通知（独立 job：任一 job 失败都触发） --------
   # 关键：不能放在 release job 里——release 的 needs 失败时会被整体跳过，导致
   # if: failure() 永不触发。独立 job + job 级 if: failure() 才能捕获上游失败。
+  # release 也放进 needs：只依赖 check/npm/portable 的话，release 自己失败（例如 pin
+  # 提交那一步）不会有任何通知 —— 这个坑当场踩到过一次。
   notify-failure:
-    needs: [check, npm, portable]
+    needs: [check, npm, portable, release]
     if: failure()
     runs-on: ubuntu-latest
     steps:
