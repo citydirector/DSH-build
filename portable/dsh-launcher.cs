@@ -222,33 +222,18 @@ class DshLauncher
         Console.WriteLine("首次以本版本启动：正在把本地会话格式升级到 v4（一次性，可回滚）...");
         Console.WriteLine();
 
-        ProcessStartInfo psi = new ProcessStartInfo();
-        psi.FileName = nodeExe;
-        psi.Arguments = Quote(migrator) + " --sessions-dir " + Quote(sessionsDir);
-        psi.WorkingDirectory = Path.Combine(baseDir, "app");   // 让 @deepseek-ai/* 从 app\node_modules 解析
-        psi.UseShellExecute = false;
-        psi.EnvironmentVariables["DSH_BUILD_COMMIT"] = version;   // 代上游脚本里的 `git rev-parse HEAD`
-        psi.EnvironmentVariables["TEMP"] = tmpDir;
-        psi.EnvironmentVariables["TMP"] = tmpDir;
-
-        // 兜底超时：迁移器卡死时不能把启动器一起拖住（会话很多时正常也就几十秒）
+        // 最多两轮：首轮并发迁移父子会话时可能有个别会话失败（父会话的 generation 在子会话
+        // 准备期间被改写），重跑时父会话已是 v4、不会再有变化，串行补齐通常一次就干净。
         int exit = 1;
-        try
+        for (int attempt = 1; attempt <= 2; attempt++)
         {
-            Process proc = Process.Start(psi);
-            if (!proc.WaitForExit(15 * 60 * 1000))
+            if (attempt == 2)
             {
-                try { proc.Kill(); } catch { }
-                Console.Error.WriteLine("会话迁移超时（15 分钟），已中止。");
+                Console.WriteLine();
+                Console.WriteLine("仍有会话未升级，自动重试一次...");
             }
-            else
-            {
-                exit = proc.ExitCode;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine("会话迁移器启动失败：" + ex.Message);
+            exit = RunMigratorOnce(nodeExe, migrator, sessionsDir, baseDir, version, tmpDir);
+            if (exit == 0) break;
         }
 
         Console.WriteLine();
@@ -263,6 +248,36 @@ class DshLauncher
         Console.Error.WriteLine("详情：" + tmpDir + " 下的 migration.log / summary.json");
         Console.Error.WriteLine("排除原因后可手动重跑：dsh.exe --migrate-sessions");
         return 1;
+    }
+
+    // 跑一轮迁移器；返回它的退出码（0 = 全部成功）。
+    // 兜底超时：迁移器卡死时不能把启动器一起拖住（会话多也就几十秒到几分钟）。
+    static int RunMigratorOnce(string nodeExe, string migrator, string sessionsDir, string baseDir, string version, string tmpDir)
+    {
+        ProcessStartInfo psi = new ProcessStartInfo();
+        psi.FileName = nodeExe;
+        psi.Arguments = Quote(migrator) + " --sessions-dir " + Quote(sessionsDir);
+        psi.WorkingDirectory = Path.Combine(baseDir, "app");   // 让 @deepseek-ai/* 从 app\node_modules 解析
+        psi.UseShellExecute = false;
+        psi.EnvironmentVariables["DSH_BUILD_COMMIT"] = version;   // 代上游脚本里的 `git rev-parse HEAD`
+        psi.EnvironmentVariables["TEMP"] = tmpDir;                // 迁移报告留在程序目录内（绿色）
+        psi.EnvironmentVariables["TMP"] = tmpDir;
+        try
+        {
+            Process proc = Process.Start(psi);
+            if (!proc.WaitForExit(15 * 60 * 1000))
+            {
+                try { proc.Kill(); } catch { }
+                Console.Error.WriteLine("会话迁移超时（15 分钟），已中止。");
+                return 1;
+            }
+            return proc.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("会话迁移器启动失败：" + ex.Message);
+            return 1;
+        }
     }
 
     static bool HasFlag(string[] args, string flag)
