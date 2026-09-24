@@ -8,8 +8,9 @@ name: Build DSH
 # 流程：每日自动构建 dev（带补丁）供测试；验证没问题后手动触发 main 发布稳定版。
 # 本地修复：portable/patch-native-code.mjs 在构建产物上应用两处补丁（幂等，上游修复后自动跳过）：
 #           1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
-#           2. session v2→v3 迁移白名单补历史 kind "instruction-hint"（旧 AGENTS.md 提示消息）
-#           补丁 2 同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
+#           2. session 迁移白名单补历史 kind "instruction-hint"（旧 AGENTS.md 提示消息）：
+#              改动点只有 v2→v3 的白名单（v3→v4 无此白名单），覆盖面是整条 v2→v3→v4 链
+#              —— v2 会话必须先过 v2→v3，故它同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
 # 会话迁移：portable/build-migrator.mjs 把上游 scripts/migrate-sessions-to-v4.ts 打成
 #          portable/app/migrate-sessions-v4.mjs 随包分发；dsh.exe 启动时跑一次，
 #          把本地 v2/v3 会话补迁移到 v4（上游只在 resume 时才升级）。

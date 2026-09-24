@@ -60,7 +60,7 @@
 - **失败隔离**：单个会话失败不影响其它会话，也不阻断启动（新版仍能按旧代际读取未升级的会话）。报告落在 `data/.migrations/tmp/`（`migration.log` + `summary.json`）。
 - **重跑**：`dsh.exe --migrate-sessions`（只迁移、不启动；会忽略已写的标记）。
 - **跳过**：设环境变量 `DSH_SKIP_SESSION_MIGRATION=1`。
-- **前置条件**：`portable/patch-native-code.mjs` 的补丁 2（v2→v3 白名单补 `instruction-hint`）—— 否则含旧 AGENTS.md 提示消息的会话会在迁移时报 `cannot safely transform unclassified message source`。构建流程已自动应用。
+- **前置条件**：`portable/patch-native-code.mjs` 的补丁 2 —— 改动点是 v2→v3 的白名单补 `instruction-hint`，覆盖面是**整条 v2→v3→v4 链**（catalog 的 migrations 图链式推进，v2 会话必须先过 v2→v3；也就是批量迁移器能 0 拒绝的前置条件）。否则含旧 AGENTS.md 提示消息的会话会在迁移时报 `cannot safely transform unclassified message source`。构建流程已自动应用。
 - ⚠️ **单向性**：迁移完成后，旧版（如仍停在 76fda72 的 `dsh-master-latest`）**读不出 v4 会话**（"future highest generation" 会被拒绝）。所以要么留在 dev 通道，要么先回滚再切回稳定版。
 
 
