@@ -101,7 +101,15 @@ await esbuild.build({
   // 便携包随包的是 node.exe 24（见 workflow 的 Copy node runtime）。目标定在 24 才能用
   // import.meta.dirname/filename —— 上游脚本的 main-guard 依赖它们。
   target: 'node24',
+  // packages:'external' + 明确禁止读 tsconfig：上游根 tsconfig.json 把 @deepseek-ai/* 用
+  // `paths` 映射到 packages/** 源码，esbuild 会先按 paths 把它们解析成文件路径，于是
+  // packages:'external' 失效 —— 结果是把大半个 monorepo（session/llm/...）内联进产物，
+  // 运行时 import.meta.url 指向便携包里的这个文件，`createRequire(...)('../package.json')`
+  // 之类的自引用全部崩掉。tsconfigRaw: '{}' 让 esbuild 不读磁盘上的 tsconfig，裸包名
+  // 才能原样留到运行时、从 app/node_modules 解析。
+  tsconfigRaw: '{}',
   packages: 'external',
+  external: ['@deepseek-ai/*'],
   sourcemap: false,
   legalComments: 'inline',
   logLevel: 'info',
