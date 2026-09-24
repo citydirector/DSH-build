@@ -65,7 +65,14 @@ async function* walk(dir) {
   }
 }
 
+// 「已打过补丁」的判据：补丁 1 在比较前插入 .replace(/\s+/g, " ")；补丁 2 的白名单里已有
+// "instruction-hint"。两者都能判定，所以「没改、也不像已改」的文件可以被单独拎出来 ——
+// 否则它们会被混进 already，看着像「上游已修」，实则补丁静默失效（上游改了写法而我们不知道）。
+const ALREADY_NATIVE = /\.replace\(\/\\s\+\/g, " "\)\s*===/;
+const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}?"instruction-hint"/;
+
 let scanned = 0, nativePatched = 0, nativeAlready = 0, skPatched = 0, skAlready = 0;
+const unmatched = [];
 for await (const file of walk(target)) {
   const raw = await readFile(file, 'utf8');
   const hasNative = raw.includes('[native code]');
@@ -76,15 +83,24 @@ for await (const file of walk(target)) {
   if (hasNative) {
     for (const p of NATIVE_PATTERNS) out = out.replace(p.re, p.repl);
     if (out !== raw) { nativePatched++; console.log(`patched(native): ${file.slice(target.length)}`); }
-    else nativeAlready++;
+    else if (ALREADY_NATIVE.test(raw)) nativeAlready++;
+    else unmatched.push(`${file.slice(target.length)} —— 含 '[native code]'，但既没命中补丁模式、也没有补丁标记`);
   } else {
     out = patchSourceKinds(out);
     if (out !== raw) { skPatched++; console.log(`patched(source-kinds): ${file.slice(target.length)}`); }
-    else skAlready++;
+    else if (ALREADY_SOURCE_KINDS.test(raw)) skAlready++;
+    else unmatched.push(`${file.slice(target.length)} —— 含 SOURCE_KINDS + 'unclassified message source'，但既没命中补丁模式、也没有 "instruction-hint"`);
   }
   if (out !== raw) await writeFile(file, out, 'utf8');
 }
-console.log(`patch-native-code: scanned=${scanned} native(patched=${nativePatched} already=${nativeAlready}) source-kinds(patched=${skPatched} already=${skAlready})`);
+console.log(`patch-native-code: scanned=${scanned} native(patched=${nativePatched} already=${nativeAlready}) source-kinds(patched=${skPatched} already=${skAlready}) unmatched=${unmatched.length}`);
+if (unmatched.length > 0) {
+  // 只告警、不让构建失败：这里也会捞到第三方文件（如 fflate 源码里提到 '[native code]' 的普通
+  // 文本），上游也可能合法地删掉整个守卫 —— 两种情况都不该中断每日构建。但要醒目，
+  // 别让它淹在绿色日志里。
+  console.log('patch-native-code: !! 下列文件带补丁目标特征却未被识别，请人工核对补丁是否仍生效：');
+  for (const line of unmatched) console.log(`patch-native-code:   !! ${line}`);
+}
 if (scanned === 0) {
   console.log('patch-native-code: no targets found (upstream already fixed?)');
 }
