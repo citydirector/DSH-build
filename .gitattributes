@@ -1,0 +1,10 @@
+# 统一行尾为 LF：CI 在 ubuntu/windows 两侧跑，仓库里混入 CRLF 会让每次编辑都产生
+# 整文件级的“伪改动”（git diff -w 为空，却显示上千行变更），掩盖真实 diff。
+* text=auto eol=lf
+
+# 二进制/产物类文件不做行尾转换
+*.zip binary
+*.exe binary
+*.zstd binary
+*.png binary
+*.ico binary
