@@ -433,6 +433,24 @@ jobs:
           path: _smoke.log
           retention-days: 3
 
+      # 校验「随包的应用撑得住它对外宣称的 bundle」。插件面板的分区靠两个硬编码名单
+      # （客户端 BUILTIN_PROFILE_BUNDLES / 宿主 OPTIONAL_BUNDLES），而 profile 选中的 bundle
+      # 未必是依赖 —— 只靠 app/node_modules 兜着；面板的开关（setBundleEnabled）又只改
+      # dsh.profile.bundles、不会安装它。兜不住就是启动时行加载失败，而且只有用户机器上看得见。
+      # 名单从**已部署的包**里解析，不写死；解析不出来就退出码 2，逼人来看。
+      # 放在 smoke test 之后：默认 profile 是 boot 时生成的，正好拿它当被测 profile。
+      - name: Check that the shipped app backs every advertised bundle
+        shell: pwsh
+        run: |
+          $cbArgs = @('_build_repo\portable\check-bundles.mjs', 'portable\app\node_modules')
+          if (Test-Path 'portable\data\profiles\web\package.json') {
+            $cbArgs += @('--profile', 'portable\data\profiles\web')
+          } else {
+            Write-Host "默认 profile 不存在，只校验随包名单"
+          }
+          node @cbArgs
+          if ($LASTEXITCODE -ne 0) { throw "check-bundles 失败：随包撑不住某个 bundle（见上面的清单）" }
+
       # 默认 profile 是 harness boot 时生成的（无 version），而 package-inventory 插件要求
       # 每个活跃条目所属包的 package.json 带非空 name+version；本地相对路径插件会解析到
       # profile 自己，缺 version 即抛错。这里给打包的默认 profile 注入 version，防新装复发。
