@@ -573,6 +573,7 @@ jobs:
           DSH_DESKTOP_SOURCE: ${{ github.workspace }}
           DSH_DESKTOP_TAG: ${{ needs.check.outputs.sha }}
           DSH_DESKTOP_OUT: ${{ github.workspace }}\desktop-build
+          DSH_DESKTOP_ZIP: ${{ github.workspace }}\dsh-desktop-win64-${{ needs.check.outputs.short_sha }}.zip
           DSH_DESKTOP_UPDATE_EXE: ${{ github.workspace }}\_build_repo\portable\update.exe
           # runner 的检出路径很短（D:\a\<repo>\<repo>），不会撞 MAX_PATH，所以打开打包后冒烟。
           DSH_DESKTOP_RUN_PACKAGED_SMOKE: "1"

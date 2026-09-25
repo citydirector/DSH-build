@@ -1,0 +1,674 @@
+﻿2026-09-25T06:19:13.8003940Z Current runner version: '2.337.0'
+2026-09-25T06:19:13.8029983Z ##[group]Runner Image Provisioner
+2026-09-25T06:19:13.8030796Z Hosted Compute Agent
+2026-09-25T06:19:13.8031314Z Version: 20260828.587
+2026-09-25T06:19:13.8031906Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-25T06:19:13.8032554Z Build Date: 2026-08-28T16:44:25Z
+2026-09-25T06:19:13.8033195Z Worker ID: {cefc0057-3230-4999-98f1-0b8edf7d14c0}
+2026-09-25T06:19:13.8033865Z Azure Region: westus3
+2026-09-25T06:19:13.8034390Z ##[endgroup]
+2026-09-25T06:19:13.8035804Z ##[group]Operating System
+2026-09-25T06:19:13.8036377Z Microsoft Windows Server 2025
+2026-09-25T06:19:13.8036918Z 10.0.26100
+2026-09-25T06:19:13.8037420Z Datacenter
+2026-09-25T06:19:13.8037875Z ##[endgroup]
+2026-09-25T06:19:13.8038382Z ##[group]Runner Image
+2026-09-25T06:19:13.8038899Z Image: windows-2025-vs2026
+2026-09-25T06:19:13.8039414Z Version: 20260922.246.2
+2026-09-25T06:19:13.8040885Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260922.246/images/windows/Windows2025-VS2026-Readme.md
+2026-09-25T06:19:13.8042421Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260922.246
+2026-09-25T06:19:13.8043287Z ##[endgroup]
+2026-09-25T06:19:13.8044303Z ##[group]GITHUB_TOKEN Permissions
+2026-09-25T06:19:13.8046516Z Contents: write
+2026-09-25T06:19:13.8047017Z Metadata: read
+2026-09-25T06:19:13.8047563Z ##[endgroup]
+2026-09-25T06:19:13.8049559Z Secret source: Actions
+2026-09-25T06:19:13.8050366Z Cache mode: write
+2026-09-25T06:19:13.8051019Z Prepare workflow directory
+2026-09-25T06:19:13.8565930Z Prepare all required actions
+2026-09-25T06:19:13.8616485Z Getting action download info
+2026-09-25T06:19:14.1725465Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-25T06:19:14.2899643Z Download action repository 'pnpm/action-setup@v6' (SHA:0977fd99725f1db4007ccb2928dbb4e90d06cc86)
+2026-09-25T06:19:14.7625650Z Download action repository 'actions/setup-node@v7' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-25T06:19:14.9023822Z Download action repository 'actions/upload-artifact@v7' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-09-25T06:19:15.1393469Z Complete job name: desktop
+2026-09-25T06:19:15.2870707Z ##[group]Run actions/checkout@v7
+2026-09-25T06:19:15.2872171Z with:
+2026-09-25T06:19:15.2872885Z   repository: deepseek-ai/deepseek-harness
+2026-09-25T06:19:15.2873844Z   ref: 477b4f420553e8a52c2fbccc464d7561b239c443
+2026-09-25T06:19:15.2874735Z   fetch-depth: 0
+2026-09-25T06:19:15.2881982Z   token: ***
+2026-09-25T06:19:15.2882621Z   ssh-strict: true
+2026-09-25T06:19:15.2883282Z   ssh-user: git
+2026-09-25T06:19:15.2883951Z   persist-credentials: true
+2026-09-25T06:19:15.2884678Z   clean: true
+2026-09-25T06:19:15.2885365Z   sparse-checkout-cone-mode: true
+2026-09-25T06:19:15.2886167Z   fetch-tags: false
+2026-09-25T06:19:15.2886843Z   show-progress: true
+2026-09-25T06:19:15.2887508Z   lfs: false
+2026-09-25T06:19:15.2888167Z   submodules: false
+2026-09-25T06:19:15.2888840Z   set-safe-directory: true
+2026-09-25T06:19:15.2889617Z   allow-unsafe-pr-checkout: false
+2026-09-25T06:19:15.2890739Z env:
+2026-09-25T06:19:15.2897403Z   GH_TOKEN: ***
+2026-09-25T06:19:15.2898104Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:19:15.2898797Z ##[endgroup]
+2026-09-25T06:19:15.4410580Z Syncing repository: deepseek-ai/deepseek-harness
+2026-09-25T06:19:15.4412969Z ##[group]Getting Git version info
+2026-09-25T06:19:15.4413894Z Working directory is 'D:\a\DSH-build\DSH-build'
+2026-09-25T06:19:15.5241706Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-25T06:19:15.8766839Z git version 2.55.0.windows.5
+2026-09-25T06:19:15.8827098Z ##[endgroup]
+2026-09-25T06:19:15.8841450Z Temporarily overriding HOME='D:\a\_temp\f43ce1a2-b754-427c-a75f-34579d954fbf' before making global git config changes
+2026-09-25T06:19:15.8845881Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-25T06:19:15.8854250Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\DSH-build\DSH-build
+2026-09-25T06:19:15.9435611Z Deleting the contents of 'D:\a\DSH-build\DSH-build'
+2026-09-25T06:19:15.9440598Z ##[group]Determining repository object format
+2026-09-25T06:19:15.9442224Z ##[endgroup]
+2026-09-25T06:19:15.9443622Z ##[group]Initializing the repository
+2026-09-25T06:19:15.9451141Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\DSH-build\DSH-build
+2026-09-25T06:19:16.0207373Z Initialized empty Git repository in D:/a/DSH-build/DSH-build/.git/
+2026-09-25T06:19:16.0255669Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/deepseek-ai/deepseek-harness
+2026-09-25T06:19:16.0817580Z ##[endgroup]
+2026-09-25T06:19:16.0819030Z ##[group]Disabling automatic garbage collection
+2026-09-25T06:19:16.0826276Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-25T06:19:16.1127483Z ##[endgroup]
+2026-09-25T06:19:16.1128846Z ##[group]Setting up auth
+2026-09-25T06:19:16.1129934Z Removing SSH command configuration
+2026-09-25T06:19:16.1138159Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-25T06:19:16.1437390Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-25T06:19:17.4801943Z Removing HTTP extra header
+2026-09-25T06:19:17.4818021Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-25T06:19:17.5121400Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-25T06:19:18.0652819Z Removing includeIf entries pointing to credentials config files
+2026-09-25T06:19:18.0663243Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-25T06:19:18.0977702Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-25T06:19:18.6233173Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-25T06:19:18.6535506Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/DSH-build/DSH-build/.git.path D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:19:18.6826535Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/DSH-build/DSH-build/.git/worktrees/*.path D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:19:18.7211607Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:19:18.7531805Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:19:18.7849275Z ##[endgroup]
+2026-09-25T06:19:18.7849939Z ##[group]Fetching the repository
+2026-09-25T06:19:18.7862311Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-09-25T06:19:39.5526410Z From https://github.com/deepseek-ai/deepseek-harness
+2026-09-25T06:19:39.5527877Z  * [new branch]            master             -> origin/master
+2026-09-25T06:19:39.5528564Z  * [new tag]               dsh-v0.1.0-rc.7    -> dsh-v0.1.0-rc.7
+2026-09-25T06:19:39.5529117Z  * [new tag]               dsh-v0.1.0-rc.8    -> dsh-v0.1.0-rc.8
+2026-09-25T06:19:39.5531040Z  * [new tag]               dsh-v0.1.1-rc.1    -> dsh-v0.1.1-rc.1
+2026-09-25T06:19:39.5531940Z  * [new tag]               dsh-v0.1.1-rc.2    -> dsh-v0.1.1-rc.2
+2026-09-25T06:19:39.5532843Z  * [new tag]               dsh-v0.1.2-alpha.1 -> dsh-v0.1.2-alpha.1
+2026-09-25T06:19:39.5533646Z  * [new tag]               dsh-v0.1.2-alpha.2 -> dsh-v0.1.2-alpha.2
+2026-09-25T06:19:39.5534285Z  * [new tag]               dsh-v0.1.2-alpha.3 -> dsh-v0.1.2-alpha.3
+2026-09-25T06:19:39.5534845Z  * [new tag]               dsh-v0.1.2-alpha.4 -> dsh-v0.1.2-alpha.4
+2026-09-25T06:19:39.5535418Z  * [new tag]               dsh-v0.1.2-alpha.5 -> dsh-v0.1.2-alpha.5
+2026-09-25T06:19:39.5535987Z  * [new tag]               dsh-v0.1.2-rc.1    -> dsh-v0.1.2-rc.1
+2026-09-25T06:19:39.5536570Z  * [new tag]               dsh-v0.1.3-alpha.1 -> dsh-v0.1.3-alpha.1
+2026-09-25T06:19:39.5537169Z  * [new tag]               dsh-v0.1.3-alpha.2 -> dsh-v0.1.3-alpha.2
+2026-09-25T06:19:39.5537944Z  * [new tag]               dsh-v0.1.5-alpha.1 -> dsh-v0.1.5-alpha.1
+2026-09-25T06:19:39.5538702Z  * [new tag]               dsh-v0.1.5-alpha.2 -> dsh-v0.1.5-alpha.2
+2026-09-25T06:19:39.5539974Z  * [new tag]               dsh-v0.1.5-rc.1    -> dsh-v0.1.5-rc.1
+2026-09-25T06:19:39.5540483Z  * [new tag]               dsh-v0.1.5-rc.2    -> dsh-v0.1.5-rc.2
+2026-09-25T06:19:39.5540992Z  * [new tag]               dsh-v0.1.5-rc.3    -> dsh-v0.1.5-rc.3
+2026-09-25T06:19:39.5542618Z  * [new tag]               dsh-v0.1.6-alpha.1 -> dsh-v0.1.6-alpha.1
+2026-09-25T06:19:39.5543259Z  * [new tag]               dsh-v0.1.6-alpha.2 -> dsh-v0.1.6-alpha.2
+2026-09-25T06:19:39.5543909Z  * [new tag]               dsh-v0.1.7-alpha.1 -> dsh-v0.1.7-alpha.1
+2026-09-25T06:19:39.5544510Z  * [new tag]               dsh-v0.1.7-alpha.2 -> dsh-v0.1.7-alpha.2
+2026-09-25T06:19:39.5545064Z  * [new tag]               dsh-v0.1.7-rc.1    -> dsh-v0.1.7-rc.1
+2026-09-25T06:19:39.5545616Z  * [new tag]               dsh-v0.1.7-rc.2    -> dsh-v0.1.7-rc.2
+2026-09-25T06:19:39.5607177Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse --verify --quiet 477b4f420553e8a52c2fbccc464d7561b239c443^{object}
+2026-09-25T06:19:39.5919767Z 477b4f420553e8a52c2fbccc464d7561b239c443
+2026-09-25T06:19:39.5968912Z ##[endgroup]
+2026-09-25T06:19:39.5969521Z ##[group]Determining the checkout info
+2026-09-25T06:19:39.5970088Z ##[endgroup]
+2026-09-25T06:19:39.5980248Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-25T06:19:39.6411597Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-25T06:19:39.6712423Z ##[group]Checking out the ref
+2026-09-25T06:19:39.6720560Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force 477b4f420553e8a52c2fbccc464d7561b239c443
+2026-09-25T06:19:40.7499343Z Updating files:  28% (3957/13850)
+2026-09-25T06:19:40.7807316Z Updating files:  29% (4017/13850)
+2026-09-25T06:19:40.8095151Z Updating files:  30% (4155/13850)
+2026-09-25T06:19:40.8416303Z Updating files:  31% (4294/13850)
+2026-09-25T06:19:40.8708579Z Updating files:  32% (4432/13850)
+2026-09-25T06:19:40.9069500Z Updating files:  33% (4571/13850)
+2026-09-25T06:19:40.9474062Z Updating files:  34% (4709/13850)
+2026-09-25T06:19:40.9918768Z Updating files:  35% (4848/13850)
+2026-09-25T06:19:41.0387170Z Updating files:  36% (4986/13850)
+2026-09-25T06:19:41.0729497Z Updating files:  37% (5125/13850)
+2026-09-25T06:19:41.1083672Z Updating files:  38% (5263/13850)
+2026-09-25T06:19:41.1417574Z Updating files:  39% (5402/13850)
+2026-09-25T06:19:41.1777870Z Updating files:  40% (5540/13850)
+2026-09-25T06:19:41.2141290Z Updating files:  41% (5679/13850)
+2026-09-25T06:19:41.2510515Z Updating files:  42% (5817/13850)
+2026-09-25T06:19:41.2835323Z Updating files:  43% (5956/13850)
+2026-09-25T06:19:41.3170620Z Updating files:  44% (6094/13850)
+2026-09-25T06:19:41.3490916Z Updating files:  45% (6233/13850)
+2026-09-25T06:19:41.3825125Z Updating files:  46% (6371/13850)
+2026-09-25T06:19:41.4158297Z Updating files:  47% (6510/13850)
+2026-09-25T06:19:41.4498314Z Updating files:  48% (6648/13850)
+2026-09-25T06:19:41.4855555Z Updating files:  49% (6787/13850)
+2026-09-25T06:19:41.5158814Z Updating files:  50% (6925/13850)
+2026-09-25T06:19:41.5472233Z Updating files:  51% (7064/13850)
+2026-09-25T06:19:41.5971797Z Updating files:  52% (7202/13850)
+2026-09-25T06:19:41.6246786Z Updating files:  53% (7341/13850)
+2026-09-25T06:19:41.6576401Z Updating files:  54% (7479/13850)
+2026-09-25T06:19:41.6888313Z Updating files:  55% (7618/13850)
+2026-09-25T06:19:41.7202349Z Updating files:  56% (7756/13850)
+2026-09-25T06:19:41.7500062Z Updating files:  57% (7895/13850)
+2026-09-25T06:19:41.7536728Z Updating files:  57% (8019/13850)
+2026-09-25T06:19:41.7868001Z Updating files:  58% (8033/13850)
+2026-09-25T06:19:41.8217993Z Updating files:  59% (8172/13850)
+2026-09-25T06:19:41.8574569Z Updating files:  60% (8310/13850)
+2026-09-25T06:19:41.8946995Z Updating files:  61% (8449/13850)
+2026-09-25T06:19:41.9354173Z Updating files:  62% (8587/13850)
+2026-09-25T06:19:42.2276678Z Updating files:  63% (8726/13850)
+2026-09-25T06:19:42.2589767Z Updating files:  64% (8864/13850)
+2026-09-25T06:19:42.2902289Z Updating files:  65% (9003/13850)
+2026-09-25T06:19:42.3244202Z Updating files:  66% (9141/13850)
+2026-09-25T06:19:42.3649027Z Updating files:  67% (9280/13850)
+2026-09-25T06:19:42.4004238Z Updating files:  68% (9418/13850)
+2026-09-25T06:19:42.4371825Z Updating files:  69% (9557/13850)
+2026-09-25T06:19:42.4735162Z Updating files:  70% (9695/13850)
+2026-09-25T06:19:42.5085446Z Updating files:  71% (9834/13850)
+2026-09-25T06:19:42.5441927Z Updating files:  72% (9972/13850)
+2026-09-25T06:19:42.5790384Z Updating files:  73% (10111/13850)
+2026-09-25T06:19:42.6154551Z Updating files:  74% (10249/13850)
+2026-09-25T06:19:42.6516953Z Updating files:  75% (10388/13850)
+2026-09-25T06:19:42.6857853Z Updating files:  76% (10526/13850)
+2026-09-25T06:19:42.7222349Z Updating files:  77% (10665/13850)
+2026-09-25T06:19:42.7504590Z Updating files:  78% (10803/13850)
+2026-09-25T06:19:42.7582799Z Updating files:  78% (10914/13850)
+2026-09-25T06:19:42.7952963Z Updating files:  79% (10942/13850)
+2026-09-25T06:19:42.8311272Z Updating files:  80% (11080/13850)
+2026-09-25T06:19:42.8681590Z Updating files:  81% (11219/13850)
+2026-09-25T06:19:42.9046234Z Updating files:  82% (11357/13850)
+2026-09-25T06:19:43.0019441Z Updating files:  83% (11496/13850)
+2026-09-25T06:19:43.0378464Z Updating files:  84% (11634/13850)
+2026-09-25T06:19:43.0748706Z Updating files:  85% (11773/13850)
+2026-09-25T06:19:43.1090932Z Updating files:  86% (11911/13850)
+2026-09-25T06:19:43.1490543Z Updating files:  87% (12050/13850)
+2026-09-25T06:19:43.1853864Z Updating files:  88% (12188/13850)
+2026-09-25T06:19:43.2196931Z Updating files:  89% (12327/13850)
+2026-09-25T06:19:43.2509540Z Updating files:  90% (12465/13850)
+2026-09-25T06:19:43.2818198Z Updating files:  91% (12604/13850)
+2026-09-25T06:19:43.5043394Z Updating files:  92% (12742/13850)
+2026-09-25T06:19:43.5350864Z Updating files:  93% (12881/13850)
+2026-09-25T06:19:43.5681765Z Updating files:  94% (13019/13850)
+2026-09-25T06:19:43.5987196Z Updating files:  95% (13158/13850)
+2026-09-25T06:19:43.6278968Z Updating files:  96% (13296/13850)
+2026-09-25T06:19:43.6560368Z Updating files:  97% (13435/13850)
+2026-09-25T06:19:43.6878954Z Updating files:  98% (13573/13850)
+2026-09-25T06:19:43.7164975Z Updating files:  99% (13712/13850)
+2026-09-25T06:19:43.7165536Z Updating files: 100% (13850/13850)
+2026-09-25T06:19:43.7165985Z Updating files: 100% (13850/13850), done.
+2026-09-25T06:19:43.7491847Z Note: switching to '477b4f420553e8a52c2fbccc464d7561b239c443'.
+2026-09-25T06:19:43.7492267Z 
+2026-09-25T06:19:43.7492490Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-25T06:19:43.7493087Z changes and commit them, and you can discard any commits you make in this
+2026-09-25T06:19:43.7493771Z state without impacting any branches by switching back to a branch.
+2026-09-25T06:19:43.7494565Z 
+2026-09-25T06:19:43.7494871Z If you want to create a new branch to retain commits you create, you may
+2026-09-25T06:19:43.7495493Z do so (now or later) by using -c with the switch command. Example:
+2026-09-25T06:19:43.7495878Z 
+2026-09-25T06:19:43.7496025Z   git switch -c <new-branch-name>
+2026-09-25T06:19:43.7496275Z 
+2026-09-25T06:19:43.7496409Z Or undo this operation with:
+2026-09-25T06:19:43.7496643Z 
+2026-09-25T06:19:43.7496761Z   git switch -
+2026-09-25T06:19:43.7496927Z 
+2026-09-25T06:19:43.7497223Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-25T06:19:43.7497667Z 
+2026-09-25T06:19:43.7498007Z HEAD is now at 477b4f4205 Merge pull request #5180 from deepseek-harness/rel/dsh-0.1.7-rc.2
+2026-09-25T06:19:43.7726078Z ##[endgroup]
+2026-09-25T06:19:43.8145518Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-25T06:19:43.8426248Z 477b4f420553e8a52c2fbccc464d7561b239c443
+2026-09-25T06:19:43.8892188Z ##[group]Run actions/checkout@v7
+2026-09-25T06:19:43.8892520Z with:
+2026-09-25T06:19:43.8892726Z   repository: citydirector/DSH-build
+2026-09-25T06:19:43.8893004Z   ref: ae27dc66042386214e00400f5775b21f976cf87c
+2026-09-25T06:19:43.8893264Z   path: _build_repo
+2026-09-25T06:19:43.8895839Z   token: ***
+2026-09-25T06:19:43.8896017Z   ssh-strict: true
+2026-09-25T06:19:43.8896200Z   ssh-user: git
+2026-09-25T06:19:43.8896388Z   persist-credentials: true
+2026-09-25T06:19:43.8896606Z   clean: true
+2026-09-25T06:19:43.8896805Z   sparse-checkout-cone-mode: true
+2026-09-25T06:19:43.8897041Z   fetch-depth: 1
+2026-09-25T06:19:43.8897221Z   fetch-tags: false
+2026-09-25T06:19:43.8897405Z   show-progress: true
+2026-09-25T06:19:43.8897595Z   lfs: false
+2026-09-25T06:19:43.8897836Z   submodules: false
+2026-09-25T06:19:43.8898066Z   set-safe-directory: true
+2026-09-25T06:19:43.8898297Z   allow-unsafe-pr-checkout: false
+2026-09-25T06:19:43.8898521Z env:
+2026-09-25T06:19:43.8901030Z   GH_TOKEN: ***
+2026-09-25T06:19:43.8901217Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:19:43.8901407Z ##[endgroup]
+2026-09-25T06:19:44.0048255Z Syncing repository: citydirector/DSH-build
+2026-09-25T06:19:44.0054981Z ##[group]Getting Git version info
+2026-09-25T06:19:44.0055379Z Working directory is 'D:\a\DSH-build\DSH-build\_build_repo'
+2026-09-25T06:19:44.0715197Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-25T06:19:44.0982660Z git version 2.55.0.windows.5
+2026-09-25T06:19:44.1029181Z ##[endgroup]
+2026-09-25T06:19:44.1042448Z Temporarily overriding HOME='D:\a\_temp\c97a79a1-2d08-423d-8d2e-a00a47f389b2' before making global git config changes
+2026-09-25T06:19:44.1043115Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-25T06:19:44.1052368Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\DSH-build\DSH-build\_build_repo
+2026-09-25T06:19:44.1361494Z ##[group]Determining repository object format
+2026-09-25T06:19:44.1363546Z ##[endgroup]
+2026-09-25T06:19:44.1364112Z ##[group]Initializing the repository
+2026-09-25T06:19:44.1374518Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\DSH-build\DSH-build\_build_repo
+2026-09-25T06:19:44.1728352Z Initialized empty Git repository in D:/a/DSH-build/DSH-build/_build_repo/.git/
+2026-09-25T06:19:44.1780140Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/citydirector/DSH-build
+2026-09-25T06:19:44.2158152Z ##[endgroup]
+2026-09-25T06:19:44.2158976Z ##[group]Disabling automatic garbage collection
+2026-09-25T06:19:44.2171897Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-25T06:19:44.2492098Z ##[endgroup]
+2026-09-25T06:19:44.2492646Z ##[group]Setting up auth
+2026-09-25T06:19:44.2493447Z Removing SSH command configuration
+2026-09-25T06:19:44.2505563Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-25T06:19:44.2822150Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-25T06:19:44.8570718Z Removing HTTP extra header
+2026-09-25T06:19:44.8586718Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-25T06:19:44.8888910Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-25T06:19:45.4294827Z Removing includeIf entries pointing to credentials config files
+2026-09-25T06:19:45.4305894Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-25T06:19:45.4605609Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-25T06:19:45.9908287Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-25T06:19:46.0215214Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git.path D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:19:46.0521656Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git/worktrees/*.path D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:19:46.0821515Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/_build_repo/.git.path /github/runner_temp/git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:19:46.1121753Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/_build_repo/.git/worktrees/*.path /github/runner_temp/git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:19:46.1462158Z ##[endgroup]
+2026-09-25T06:19:46.1462701Z ##[group]Fetching the repository
+2026-09-25T06:19:46.1473918Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin ae27dc66042386214e00400f5775b21f976cf87c
+2026-09-25T06:19:46.7925230Z From https://github.com/citydirector/DSH-build
+2026-09-25T06:19:46.7925891Z  * branch            ae27dc66042386214e00400f5775b21f976cf87c -> FETCH_HEAD
+2026-09-25T06:19:46.7970852Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse --verify --quiet ae27dc66042386214e00400f5775b21f976cf87c^{object}
+2026-09-25T06:19:46.8226329Z ae27dc66042386214e00400f5775b21f976cf87c
+2026-09-25T06:19:46.8264628Z ##[endgroup]
+2026-09-25T06:19:46.8265176Z ##[group]Determining the checkout info
+2026-09-25T06:19:46.8266083Z ##[endgroup]
+2026-09-25T06:19:46.8276120Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-25T06:19:46.8606037Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-25T06:19:46.8895722Z ##[group]Checking out the ref
+2026-09-25T06:19:46.8904207Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force ae27dc66042386214e00400f5775b21f976cf87c
+2026-09-25T06:19:46.9403457Z Note: switching to 'ae27dc66042386214e00400f5775b21f976cf87c'.
+2026-09-25T06:19:46.9403915Z 
+2026-09-25T06:19:46.9404231Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-25T06:19:46.9404992Z changes and commit them, and you can discard any commits you make in this
+2026-09-25T06:19:46.9405723Z state without impacting any branches by switching back to a branch.
+2026-09-25T06:19:46.9406158Z 
+2026-09-25T06:19:46.9406474Z If you want to create a new branch to retain commits you create, you may
+2026-09-25T06:19:46.9407477Z do so (now or later) by using -c with the switch command. Example:
+2026-09-25T06:19:46.9407906Z 
+2026-09-25T06:19:46.9408059Z   git switch -c <new-branch-name>
+2026-09-25T06:19:46.9408323Z 
+2026-09-25T06:19:46.9408461Z Or undo this operation with:
+2026-09-25T06:19:46.9408697Z 
+2026-09-25T06:19:46.9408818Z   git switch -
+2026-09-25T06:19:46.9408986Z 
+2026-09-25T06:19:46.9409329Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-25T06:19:46.9409820Z 
+2026-09-25T06:19:46.9410175Z HEAD is now at ae27dc6 chore(desktop): Drop the temporary commit message file
+2026-09-25T06:19:46.9468245Z ##[endgroup]
+2026-09-25T06:19:46.9851360Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-25T06:19:47.0130266Z ae27dc66042386214e00400f5775b21f976cf87c
+2026-09-25T06:19:47.0481129Z ##[group]Run node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
+2026-09-25T06:19:47.0482667Z [36;1mnode -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"[0m
+2026-09-25T06:19:47.0483502Z [36;1mnode -p "require('./package.json').packageManager"[0m
+2026-09-25T06:19:47.1171695Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:19:47.1172104Z env:
+2026-09-25T06:19:47.1175393Z   GH_TOKEN: ***
+2026-09-25T06:19:47.1175632Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:19:47.1175874Z ##[endgroup]
+2026-09-25T06:19:49.8236764Z pnpm@11.27.1
+2026-09-25T06:19:49.9731259Z ##[group]Run pnpm/action-setup@v6
+2026-09-25T06:19:49.9731598Z with:
+2026-09-25T06:19:49.9731778Z   version: 11.27.1
+2026-09-25T06:19:49.9731964Z   dest: ~/setup-pnpm
+2026-09-25T06:19:49.9732158Z   run_install: null
+2026-09-25T06:19:49.9732350Z   cache: false
+2026-09-25T06:19:49.9732566Z   cache_dependency_path: pnpm-lock.yaml
+2026-09-25T06:19:49.9732834Z   package_json_file: package.json
+2026-09-25T06:19:49.9733060Z   standalone: false
+2026-09-25T06:19:49.9733228Z env:
+2026-09-25T06:19:49.9735819Z   GH_TOKEN: ***
+2026-09-25T06:19:49.9736007Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:19:49.9736213Z ##[endgroup]
+2026-09-25T06:19:50.1525267Z ##[group]Running self-installer...
+2026-09-25T06:19:50.1586587Z (node:8468) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+2026-09-25T06:19:50.1587930Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-25T06:20:01.5729851Z 
+2026-09-25T06:20:01.5730406Z added 1 package, and audited 2 packages in 10s
+2026-09-25T06:20:01.5730797Z 
+2026-09-25T06:20:01.5730962Z 1 package is looking for funding
+2026-09-25T06:20:01.5731360Z   run `npm fund` for details
+2026-09-25T06:20:01.5739575Z 
+2026-09-25T06:20:01.5739774Z found 0 vulnerabilities
+2026-09-25T06:20:03.7576007Z Checking for updates...
+2026-09-25T06:20:03.9337589Z Switching pnpm from v11.19.0 to v11.27.1...
+2026-09-25T06:20:04.5436807Z .../21b0-1a0d7389399-1008bef2e6fd930c    | Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-09-25T06:20:04.5458690Z .../21b0-1a0d7389399-1008bef2e6fd930c    |   +1 +
+2026-09-25T06:20:05.4527668Z .../21b0-1a0d7389399-1008bef2e6fd930c    | Progress: resolved 1, reused 0, downloaded 1, added 1, done
+2026-09-25T06:20:06.7676718Z [WARN] Detected a pnpm v10 installation layout at PNPM_HOME. The pnpm shims at PNPM_HOME have been refreshed so the new version is active, but pnpm v11 expects bins in PNPM_HOME/bin. Run "pnpm setup" to migrate your PATH to the v11 layout.
+2026-09-25T06:20:06.7712356Z Successfully updated pnpm to v11.27.1
+2026-09-25T06:20:06.8432428Z ##[endgroup]
+2026-09-25T06:20:06.8432802Z Installation Completed!
+2026-09-25T06:20:06.8746008Z ##[group]Run actions/setup-node@v7
+2026-09-25T06:20:06.8746535Z with:
+2026-09-25T06:20:06.8746735Z   node-version: 24
+2026-09-25T06:20:06.8746930Z   cache: pnpm
+2026-09-25T06:20:06.8747135Z   check-latest: false
+2026-09-25T06:20:06.8749795Z   token: ***
+2026-09-25T06:20:06.8750012Z   package-manager-cache: true
+2026-09-25T06:20:06.8750249Z env:
+2026-09-25T06:20:06.8752652Z   GH_TOKEN: ***
+2026-09-25T06:20:06.8752857Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:06.8753181Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:06.8753499Z ##[endgroup]
+2026-09-25T06:20:07.0379980Z Found in cache @ C:\hostedtoolcache\windows\node\24.21.0\x64
+2026-09-25T06:20:07.0385897Z ##[group]Environment details
+2026-09-25T06:20:11.6151883Z node: v24.21.0
+2026-09-25T06:20:11.6152148Z npm: 11.19.0
+2026-09-25T06:20:11.6152324Z yarn: 1.22.22
+2026-09-25T06:20:11.6152761Z ##[endgroup]
+2026-09-25T06:20:11.6920112Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\Users\runneradmin\setup-pnpm\node_modules\.bin\bin\pnpm.CMD store path --silent"
+2026-09-25T06:20:12.9367929Z D:\.pnpm-store\v11
+2026-09-25T06:20:13.3066508Z pnpm cache is not found
+2026-09-25T06:20:13.3367269Z ##[group]Run pnpm --version
+2026-09-25T06:20:13.3367737Z [36;1mpnpm --version[0m
+2026-09-25T06:20:13.3368014Z [36;1mnode --version[0m
+2026-09-25T06:20:13.3437712Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:20:13.3438061Z env:
+2026-09-25T06:20:13.3441093Z   GH_TOKEN: ***
+2026-09-25T06:20:13.3441307Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:13.3441610Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:13.3441949Z ##[endgroup]
+2026-09-25T06:20:14.0875739Z 11.27.1
+2026-09-25T06:20:14.1255206Z v24.21.0
+2026-09-25T06:20:14.2372079Z ##[group]Run pnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true
+2026-09-25T06:20:14.2372833Z [36;1mpnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true[0m
+2026-09-25T06:20:14.2440992Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:20:14.2441367Z env:
+2026-09-25T06:20:14.2444040Z   GH_TOKEN: ***
+2026-09-25T06:20:14.2444258Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:14.2444560Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:14.2444886Z ##[endgroup]
+2026-09-25T06:20:15.1137128Z native/system/packages/darwin-arm64      | [WARN] Unsupported platform: wanted: {"cpu":["arm64"],"os":["darwin"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+2026-09-25T06:20:15.1145226Z native/system/packages/darwin-x64        | [WARN] Unsupported platform: wanted: {"cpu":["x64"],"os":["darwin"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+2026-09-25T06:20:15.1148628Z native/system/packages/linux-arm64       | [WARN] Unsupported platform: wanted: {"cpu":["arm64"],"os":["linux"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+2026-09-25T06:20:15.1151351Z native/system/packages/linux-x64         | [WARN] Unsupported platform: wanted: {"cpu":["x64"],"os":["linux"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+2026-09-25T06:20:15.3467408Z Scope: all 335 workspace projects
+2026-09-25T06:20:15.4763570Z [WARN] There are cyclic workspace dependencies: D:\a\DSH-build\DSH-build\apps\cli, D:\a\DSH-build\DSH-build\packages\sdk\client; D:\a\DSH-build\DSH-build\apps\web, D:\a\DSH-build\DSH-build\packages\test-support\client-runtime, D:\a\DSH-build\DSH-build\packages\bundle\web-app; D:\a\DSH-build\DSH-build\packages\api\remotes, D:\a\DSH-build\DSH-build\packages\client\ui-plugin-manager, D:\a\DSH-build\DSH-build\packages\client\ui-sidebar, D:\a\DSH-build\DSH-build\packages\client\ui-workspace, D:\a\DSH-build\DSH-build\packages\client\ui-conversation; D:\a\DSH-build\DSH-build\packages\api\session-controller, D:\a\DSH-build\DSH-build\packages\subagent\subagent, D:\a\DSH-build\DSH-build\packages\schedule\schedule; D:\a\DSH-build\DSH-build\packages\compaction\compaction-basic, D:\a\DSH-build\DSH-build\packages\compaction\compaction-image-offload; D:\a\DSH-build\DSH-build\packages\compaction\compaction-tool-result-pruner, D:\a\DSH-build\DSH-build\packages\llm\token-meter, D:\a\DSH-build\DSH-build\packages\llm\llm-retry, D:\a\DSH-build\DSH-build\packages\llm\llm-deepseek, D:\a\DSH-build\DSH-build\packages\llm\plugin-package-inventory-deepseek, D:\a\DSH-build\DSH-build\packages\preset\agent-preset-registry, D:\a\DSH-build\DSH-build\packages\preset\agent-preset; D:\a\DSH-build\DSH-build\packages\core\agent-default-model, D:\a\DSH-build\DSH-build\packages\settings\settings; D:\a\DSH-build\DSH-build\packages\sandbox\sandbox-local, D:\a\DSH-build\DSH-build\packages\sandbox\sandbox-windows-acl; D:\a\DSH-build\DSH-build\packages\ssh\fs-ssh, D:\a\DSH-build\DSH-build\packages\ssh\ssh; D:\a\DSH-build\DSH-build\packages\subagent\subagent-spawn-in-process, D:\a\DSH-build\DSH-build\packages\subagent\tool-subagent; D:\a\DSH-build\DSH-build\vendor\cordis, D:\a\DSH-build\DSH-build\vendor\include
+2026-09-25T06:20:15.7326241Z ? Verifying lockfile against supply-chain policies (1680 entries)...
+2026-09-25T06:20:15.9889074Z Lockfile is up to date, resolution step is skipped
+2026-09-25T06:20:16.3696396Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-09-25T06:20:16.5518252Z Packages: +1387
+2026-09-25T06:20:16.5520184Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-09-25T06:20:17.3728168Z Progress: resolved 1387, reused 0, downloaded 17, added 0
+2026-09-25T06:20:18.3878839Z Progress: resolved 1387, reused 0, downloaded 35, added 0
+2026-09-25T06:20:19.4129337Z Progress: resolved 1387, reused 0, downloaded 60, added 0
+2026-09-25T06:20:19.8122199Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-25T06:20:19.8123556Z   Content-addressable store is at: D:\.pnpm-store\v11
+2026-09-25T06:20:19.8125207Z   Virtual store is at:             node_modules/.pnpm
+2026-09-25T06:20:20.4131644Z Progress: resolved 1387, reused 0, downloaded 101, added 4
+2026-09-25T06:20:21.4182257Z Progress: resolved 1387, reused 0, downloaded 119, added 4
+2026-09-25T06:20:22.4144022Z Progress: resolved 1387, reused 0, downloaded 146, added 7
+2026-09-25T06:20:23.4252005Z Progress: resolved 1387, reused 0, downloaded 170, added 8
+2026-09-25T06:20:24.4515323Z Progress: resolved 1387, reused 0, downloaded 257, added 12
+2026-09-25T06:20:25.4744702Z Progress: resolved 1387, reused 0, downloaded 319, added 16
+2026-09-25T06:20:26.4935792Z Progress: resolved 1387, reused 0, downloaded 368, added 20
+2026-09-25T06:20:27.5011051Z Progress: resolved 1387, reused 0, downloaded 423, added 24
+2026-09-25T06:20:28.4935614Z Progress: resolved 1387, reused 0, downloaded 474, added 28
+2026-09-25T06:20:28.9132834Z ✓ Lockfile passes supply-chain policies (1680 entries in 13.1s)
+2026-09-25T06:20:29.5004843Z Progress: resolved 1387, reused 0, downloaded 502, added 30
+2026-09-25T06:20:30.5283409Z Progress: resolved 1387, reused 0, downloaded 516, added 32
+2026-09-25T06:20:31.5234219Z Progress: resolved 1387, reused 0, downloaded 544, added 32
+2026-09-25T06:20:32.5161335Z Progress: resolved 1387, reused 0, downloaded 567, added 35
+2026-09-25T06:20:33.5195403Z Progress: resolved 1387, reused 0, downloaded 649, added 40
+2026-09-25T06:20:34.5271769Z Progress: resolved 1387, reused 0, downloaded 763, added 48
+2026-09-25T06:20:35.5272216Z Progress: resolved 1387, reused 0, downloaded 876, added 56
+2026-09-25T06:20:36.5390582Z Progress: resolved 1387, reused 0, downloaded 1001, added 64
+2026-09-25T06:20:37.5396639Z Progress: resolved 1387, reused 0, downloaded 1238, added 80
+2026-09-25T06:20:38.5473832Z Progress: resolved 1387, reused 0, downloaded 1382, added 121
+2026-09-25T06:20:39.5615382Z Progress: resolved 1387, reused 0, downloaded 1382, added 165
+2026-09-25T06:20:40.5681935Z Progress: resolved 1387, reused 0, downloaded 1382, added 327
+2026-09-25T06:20:41.5752333Z Progress: resolved 1387, reused 0, downloaded 1382, added 480
+2026-09-25T06:20:42.5755756Z Progress: resolved 1387, reused 0, downloaded 1382, added 585
+2026-09-25T06:20:43.5766979Z Progress: resolved 1387, reused 0, downloaded 1382, added 929
+2026-09-25T06:20:44.5769311Z Progress: resolved 1387, reused 0, downloaded 1382, added 1374
+2026-09-25T06:20:45.0421499Z Progress: resolved 1387, reused 0, downloaded 1382, added 1387, done
+2026-09-25T06:20:48.1292458Z .../.pnpm/koffi@3.1.1/node_modules/koffi install$ node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+2026-09-25T06:20:48.1487530Z .../esbuild@0.28.1/node_modules/esbuild postinstall$ node install.js
+2026-09-25T06:20:48.1538961Z .../lefthook@2.1.9/node_modules/lefthook postinstall$ node postinstall.js
+2026-09-25T06:20:48.1641885Z .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+2026-09-25T06:20:48.3009107Z .../lefthook@2.1.9/node_modules/lefthook postinstall: Done
+2026-09-25T06:20:48.3744886Z .../.pnpm/koffi@3.1.1/node_modules/koffi install: Done
+2026-09-25T06:20:48.3828642Z .../node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+2026-09-25T06:20:48.4037784Z .../esbuild@0.28.1/node_modules/esbuild postinstall: Done
+2026-09-25T06:20:48.4219740Z .../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+2026-09-25T06:20:48.4333139Z .../esbuild@0.21.5/node_modules/esbuild postinstall$ node install.js
+2026-09-25T06:20:48.4877186Z .../node_modules/node-pty install: [32m> Checking prebuilds...[0m
+2026-09-25T06:20:48.5391568Z .../node_modules/node-pty install: Done
+2026-09-25T06:20:48.5410750Z .../node_modules/node-pty postinstall$ node scripts/post-install.js
+2026-09-25T06:20:48.6320994Z .../node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+2026-09-25T06:20:48.6377502Z .../node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+2026-09-25T06:20:48.6408278Z .../node_modules/node-pty postinstall:   Using os.arch(): x64
+2026-09-25T06:20:48.6443459Z .../node_modules/node-pty postinstall:   Found version 1.25.260303002
+2026-09-25T06:20:48.6459064Z .../node_modules/node-pty postinstall:   Copying D:\a\DSH-build\DSH-build\node_modules\.pnpm\node-pty@1.2.0-beta.15_patc_04ea68a78398ae52b35b6f6b1ec3bdf9\node_modules\node-pty\third_party\conpty\1.25.260303002\win10-x64\conpty.dll -> D:\a\DSH-build\DSH-build\node_modules\.pnpm\node-pty@1.2.0-beta.15_patc_04ea68a78398ae52b35b6f6b1ec3bdf9\node_modules\node-pty\build\Release\conpty\conpty.dll
+2026-09-25T06:20:48.6554760Z .../node_modules/node-pty postinstall:   Copying D:\a\DSH-build\DSH-build\node_modules\.pnpm\node-pty@1.2.0-beta.15_patc_04ea68a78398ae52b35b6f6b1ec3bdf9\node_modules\node-pty\third_party\conpty\1.25.260303002\win10-x64\OpenConsole.exe -> D:\a\DSH-build\DSH-build\node_modules\.pnpm\node-pty@1.2.0-beta.15_patc_04ea68a78398ae52b35b6f6b1ec3bdf9\node_modules\node-pty\build\Release\conpty\OpenConsole.exe
+2026-09-25T06:20:48.6711325Z .../node_modules/node-pty postinstall: Done
+2026-09-25T06:20:48.7427637Z .../esbuild@0.21.5/node_modules/esbuild postinstall: Done
+2026-09-25T06:20:48.9039873Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\apps\desktop-host\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\apps\cli\lib\bin.js.EXE'
+2026-09-25T06:20:49.6965683Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\packages\sdk\client\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\apps\cli\lib\bin.js.EXE'
+2026-09-25T06:20:49.9942422Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\python\sdk-runtime\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\apps\cli\lib\bin.js.EXE'
+2026-09-25T06:20:50.1919199Z 
+2026-09-25T06:20:50.1919710Z devDependencies:
+2026-09-25T06:20:50.1923887Z + @deepseek-ai/dsh-agent 0.1.7-rc.2 <- packages\core\agent
+2026-09-25T06:20:50.1924951Z + @deepseek-ai/dsh-browser-use 0.1.7-rc.2 <- packages\browser-use\browser-use
+2026-09-25T06:20:50.1925924Z + @deepseek-ai/dsh-computer-use 0.1.7-rc.2 <- packages\computer-use\computer-use
+2026-09-25T06:20:50.1927943Z + @deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp 0.1.7-rc.2 <- packages\experimental\browser-use-chrome-devtools-mcp
+2026-09-25T06:20:50.1929506Z + @deepseek-ai/dsh-experimental-browser-use-playwright-mcp 0.1.7-rc.2 <- packages\experimental\browser-use-playwright-mcp
+2026-09-25T06:20:50.1930853Z + @deepseek-ai/dsh-experimental-browser-use-runtime 0.1.7-rc.2 <- packages\experimental\browser-use-runtime
+2026-09-25T06:20:50.1931744Z + @deepseek-ai/dsh-experimental-browser-use-stagehand-native 0.1.7-rc.2 <- packages\experimental\browser-use-stagehand-native
+2026-09-25T06:20:50.1932670Z + @deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp 0.1.7-rc.2 <- packages\experimental\computer-use-cua-driver-mcp
+2026-09-25T06:20:50.1933598Z + @deepseek-ai/dsh-experimental-computer-use-cua-driver-native 0.1.7-rc.2 <- packages\experimental\computer-use-cua-driver-native
+2026-09-25T06:20:50.1934325Z + @deepseek-ai/dsh-llm-replay 0.1.7-rc.2 <- packages\test-support\llm-replay
+2026-09-25T06:20:50.1934850Z + @deepseek-ai/dsh-mcp-client 0.1.7-rc.2 <- packages\mcp\mcp-client
+2026-09-25T06:20:50.1935347Z + @deepseek-ai/dsh-skill-office 0.1.7-rc.2 <- packages\skill\skill-office
+2026-09-25T06:20:50.1935950Z + @deepseek-ai/dsh-tool-session-query 0.1.7-rc.2 <- packages\session-query\tool-session-query
+2026-09-25T06:20:50.1936652Z + @deepseek-ai/dsh-tool-workspace-dependencies 0.1.7-rc.2 <- packages\skill\tool-workspace-dependencies
+2026-09-25T06:20:50.1937285Z + @deepseek-ai/dsh-web-fetch-http 0.1.7-rc.2 <- packages\web\web-fetch-http
+2026-09-25T06:20:50.1937698Z + @stylistic/eslint-plugin 5.10.0
+2026-09-25T06:20:50.1938023Z + @testing-library/dom 10.4.2
+2026-09-25T06:20:50.1938433Z + @testing-library/react 16.3.2
+2026-09-25T06:20:50.1939141Z + @types/js-yaml 4.0.9
+2026-09-25T06:20:50.1939960Z + @types/jsdom 28.0.3
+2026-09-25T06:20:50.1940313Z + @types/mdast 4.0.4
+2026-09-25T06:20:50.1940550Z + @types/node 22.20.0
+2026-09-25T06:20:50.1940839Z + @types/spdx-expression-parse 4.0.0
+2026-09-25T06:20:50.1941141Z + @vitest/coverage-v8 4.1.8
+2026-09-25T06:20:50.1941390Z + @yao-pkg/pkg 6.21.0
+2026-09-25T06:20:50.1941620Z + @yarnpkg/cli-dist 4.17.1
+2026-09-25T06:20:50.1941889Z + eslint-plugin-sonarjs 4.1.0
+2026-09-25T06:20:50.1942127Z + execa 10.0.0
+2026-09-25T06:20:50.1942341Z + extract-zip 2.0.1
+2026-09-25T06:20:50.1942569Z + fast-check 4.8.0
+2026-09-25T06:20:50.1942768Z + fflate 0.8.3
+2026-09-25T06:20:50.1942988Z + istanbul-lib-report 3.0.1
+2026-09-25T06:20:50.1943213Z + js-yaml 4.2.0
+2026-09-25T06:20:50.1943411Z + jscpd 5.0.12
+2026-09-25T06:20:50.1943601Z + jsdom 29.1.1
+2026-09-25T06:20:50.1943802Z + lefthook 2.1.9
+2026-09-25T06:20:50.1944020Z + lightningcss 1.32.0
+2026-09-25T06:20:50.1944284Z + mdast-util-from-markdown 2.0.3
+2026-09-25T06:20:50.1944546Z + mdast-util-gfm 3.1.0
+2026-09-25T06:20:50.1944772Z + mermaid 11.16.0
+2026-09-25T06:20:50.1945018Z + micromark-extension-gfm 3.0.0
+2026-09-25T06:20:50.1945253Z + oxlint 1.76.0
+2026-09-25T06:20:50.1945480Z + oxlint-tsgolint 7.0.2001
+2026-09-25T06:20:50.1945728Z + pnpm 11.7.0
+2026-09-25T06:20:50.1946156Z + publint 0.3.21
+2026-09-25T06:20:50.1946431Z + smol-toml 1.7.1
+2026-09-25T06:20:50.1946821Z + spdx-expression-parse 5.0.0
+2026-09-25T06:20:50.1947058Z + tar 7.5.22
+2026-09-25T06:20:50.1947242Z + tsdown 0.22.2
+2026-09-25T06:20:50.1947434Z + tsx 4.22.4
+2026-09-25T06:20:50.1947650Z + typescript 6.0.3
+2026-09-25T06:20:50.1947873Z + vite-tsconfig-paths 6.1.1
+2026-09-25T06:20:50.1948104Z + vitest 4.1.8
+2026-09-25T06:20:50.1948215Z 
+2026-09-25T06:20:50.4845695Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\packages\sdk\client\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\packages\sdk\client\node_modules\@deepseek-ai\dsh\lib\bin.js.EXE'
+2026-09-25T06:20:50.9140901Z packages/subprocess/subprocess-local postinstall$ node scripts/ensure-spawn-helper.mjs
+2026-09-25T06:20:51.0036864Z packages/subprocess/subprocess-local postinstall: Done
+2026-09-25T06:20:51.0607916Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\apps\desktop-host\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\apps\desktop-host\node_modules\@deepseek-ai\dsh\lib\bin.js.EXE'
+2026-09-25T06:20:51.5881396Z . postinstall$ node scripts/install-lefthook.mjs
+2026-09-25T06:20:51.6227583Z [WARN] Failed to create bin at D:\a\DSH-build\DSH-build\python\sdk-runtime\node_modules\.bin\dsh. ENOENT: no such file or directory, stat 'D:\a\DSH-build\DSH-build\python\sdk-runtime\node_modules\@deepseek-ai\dsh\lib\bin.js.EXE'
+2026-09-25T06:20:51.6775406Z . postinstall: Done
+2026-09-25T06:20:51.7133388Z Done in 37.1s using pnpm v11.27.1
+2026-09-25T06:20:51.9739724Z ##[group]Run node _build_repo/tests/patch-desktop.test.mjs
+2026-09-25T06:20:51.9740292Z [36;1mnode _build_repo/tests/patch-desktop.test.mjs[0m
+2026-09-25T06:20:51.9808517Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:20:51.9808961Z env:
+2026-09-25T06:20:51.9812360Z   GH_TOKEN: ***
+2026-09-25T06:20:51.9812636Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:51.9812959Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:51.9813318Z ##[endgroup]
+2026-09-25T06:20:52.2942472Z   ok  P3 编辑命中且不动其它
+2026-09-25T06:20:52.3042620Z   ok  P3 锚点缺失时报错而不是静默跳过
+2026-09-25T06:20:52.3117514Z   ok  P3 不动运行时（update-coordinator 原样保留）
+2026-09-25T06:20:52.3185648Z   ok  P3 幂等：重复运行不重复改（第二次因已改而抛锚点不匹配）
+2026-09-25T06:20:52.3284485Z   ok  P2 写入 bootstrap 并把 import 插到第一行
+2026-09-25T06:20:52.3360640Z   ok  P2 幂等：第二次运行不再插入 import
+2026-09-25T06:20:52.3477677Z   ok  工具链补丁：两处编辑都能命中且幂等
+2026-09-25T06:20:52.3479293Z patch-desktop tests: 7/7 通过
+2026-09-25T06:20:52.4907410Z ##[group]Run $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+2026-09-25T06:20:52.4908035Z [36;1m$csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"[0m
+2026-09-25T06:20:52.4908487Z [36;1m& $csc /nologo /target:exe /out:_build_repo\portable\update.exe `[0m
+2026-09-25T06:20:52.4908900Z [36;1m  /r:System.IO.Compression.FileSystem.dll `[0m
+2026-09-25T06:20:52.4909267Z [36;1m  /r:System.IO.Compression.dll `[0m
+2026-09-25T06:20:52.4909567Z [36;1m  _build_repo\portable\dsh-updater.cs[0m
+2026-09-25T06:20:52.4910005Z [36;1mif (-not (Test-Path _build_repo\portable\update.exe)) { throw "update.exe 编译失败" }[0m
+2026-09-25T06:20:52.4975660Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:20:52.4976023Z env:
+2026-09-25T06:20:52.4978765Z   GH_TOKEN: ***
+2026-09-25T06:20:52.4978981Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:52.4979278Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:52.4979657Z ##[endgroup]
+2026-09-25T06:20:54.4521028Z ##[group]Run node _build_repo/portable/build-desktop.mjs
+2026-09-25T06:20:54.4521482Z [36;1mnode _build_repo/portable/build-desktop.mjs[0m
+2026-09-25T06:20:54.4587026Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-25T06:20:54.4587392Z env:
+2026-09-25T06:20:54.4590101Z   GH_TOKEN: ***
+2026-09-25T06:20:54.4590351Z   PNPM_VERSION: 11.27.1
+2026-09-25T06:20:54.4590653Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-09-25T06:20:54.4591007Z   DSH_DESKTOP_SOURCE: D:\a\DSH-build\DSH-build
+2026-09-25T06:20:54.4591347Z   DSH_DESKTOP_TAG: 477b4f420553e8a52c2fbccc464d7561b239c443
+2026-09-25T06:20:54.4591713Z   DSH_DESKTOP_OUT: D:\a\DSH-build\DSH-build\desktop-build
+2026-09-25T06:20:54.4592133Z   DSH_DESKTOP_UPDATE_EXE: D:\a\DSH-build\DSH-build\_build_repo\portable\update.exe
+2026-09-25T06:20:54.4592526Z   DSH_DESKTOP_RUN_PACKAGED_SMOKE: 1
+2026-09-25T06:20:54.4592775Z ##[endgroup]
+2026-09-25T06:20:54.7654666Z [1/7] applying source patches (update disable / portable bootstrap / toolchain / runtime order)
+2026-09-25T06:20:54.7657780Z [patch] $ C:\hostedtoolcache\windows\node\24.21.0\x64\node.exe D:\a\DSH-build\DSH-build\_build_repo\portable\patch-desktop-update.mjs D:\a\DSH-build\DSH-build
+2026-09-25T06:20:54.8271995Z patch-desktop-update: applied 1 edit(s)
+2026-09-25T06:20:54.8274227Z   - packaged manifest: no embedded Platform policy
+2026-09-25T06:20:54.8343110Z [patch] $ C:\hostedtoolcache\windows\node\24.21.0\x64\node.exe D:\a\DSH-build\DSH-build\_build_repo\portable\patch-desktop-portable.mjs D:\a\DSH-build\DSH-build
+2026-09-25T06:20:54.8925822Z patch-desktop-portable: bootstrap=written import=inserted
+2026-09-25T06:20:54.9006502Z [patch] $ C:\hostedtoolcache\windows\node\24.21.0\x64\node.exe D:\a\DSH-build\DSH-build\_build_repo\portable\patch-desktop-toolchain.mjs D:\a\DSH-build\DSH-build
+2026-09-25T06:20:54.9490597Z patch-desktop-toolchain: applied 3 edit(s)
+2026-09-25T06:20:54.9560122Z   - toolchain: allow skipping the installer-only Visual Studio probe
+2026-09-25T06:20:54.9561065Z   - packaging: skip installer UI preparation for a directory-only build
+2026-09-25T06:20:54.9561915Z   - packaging: allow skipping the post-package runtime smoke
+2026-09-25T06:20:54.9563511Z [patch] $ C:\hostedtoolcache\windows\node\24.21.0\x64\node.exe D:\a\DSH-build\DSH-build\_build_repo\portable\patch-desktop-runtime-patch.mjs D:\a\DSH-build\DSH-build
+2026-09-25T06:20:55.0049083Z patch-desktop-runtime-patch: applied
+2026-09-25T06:20:55.0119006Z [2/7] building upstream repository (official profile)
+2026-09-25T06:20:55.0119706Z [build] $ pnpm run build:official
+2026-09-25T06:20:55.0160546Z node:internal/child_process:1160
+2026-09-25T06:20:55.0162580Z     result.error = new ErrnoException(result.error, 'spawnSync ' + options.file);
+2026-09-25T06:20:55.0163000Z                    ^
+2026-09-25T06:20:55.0163137Z 
+2026-09-25T06:20:55.0163256Z Error: spawnSync pnpm ENOENT
+2026-09-25T06:20:55.0163655Z     at Object.spawnSync (node:internal/child_process:1160:20)
+2026-09-25T06:20:55.0164022Z     at spawnSync (node:child_process:928:24)
+2026-09-25T06:20:55.0164479Z     at run (file:///D:/a/DSH-build/DSH-build/_build_repo/portable/build-desktop.mjs:62:18)
+2026-09-25T06:20:55.0165059Z     at main (file:///D:/a/DSH-build/DSH-build/_build_repo/portable/build-desktop.mjs:125:5)
+2026-09-25T06:20:55.0165611Z     at file:///D:/a/DSH-build/DSH-build/_build_repo/portable/build-desktop.mjs:195:1
+2026-09-25T06:20:55.0166114Z     at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+2026-09-25T06:20:55.0166532Z     at async node:internal/modules/esm/loader:647:26
+2026-09-25T06:20:55.0166991Z     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+2026-09-25T06:20:55.0167407Z   errno: -4058,
+2026-09-25T06:20:55.0167615Z   code: 'ENOENT',
+2026-09-25T06:20:55.0167850Z   syscall: 'spawnSync pnpm',
+2026-09-25T06:20:55.0168089Z   path: 'pnpm',
+2026-09-25T06:20:55.0168320Z   spawnargs: [ 'run', 'build:official' ]
+2026-09-25T06:20:55.0171265Z }
+2026-09-25T06:20:55.0172035Z 
+2026-09-25T06:20:55.0172271Z Node.js v24.21.0
+2026-09-25T06:20:55.1206079Z ##[error]Process completed with exit code 1.
+2026-09-25T06:20:55.1412095Z Post job cleanup.
+2026-09-25T06:20:55.3165923Z Pruning is unnecessary.
+2026-09-25T06:20:55.3464134Z Post job cleanup.
+2026-09-25T06:20:55.5248085Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-25T06:20:55.5513059Z git version 2.55.0.windows.5
+2026-09-25T06:20:55.5570470Z Temporarily overriding HOME='D:\a\_temp\54c96cb0-d9e9-4e4a-b4b8-f55d4955ee89' before making global git config changes
+2026-09-25T06:20:55.5571388Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-25T06:20:55.5580895Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\DSH-build\DSH-build\_build_repo
+2026-09-25T06:20:55.5874578Z Removing SSH command configuration
+2026-09-25T06:20:55.5884869Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-25T06:20:55.6211452Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-25T06:20:56.1468907Z Removing HTTP extra header
+2026-09-25T06:20:56.1479188Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-25T06:20:56.1783983Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-25T06:20:56.7249640Z Removing includeIf entries pointing to credentials config files
+2026-09-25T06:20:56.7263050Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-25T06:20:56.7572836Z includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git.path
+2026-09-25T06:20:56.7573879Z includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git/worktrees/*.path
+2026-09-25T06:20:56.7574812Z includeif.gitdir:/github/workspace/_build_repo/.git.path
+2026-09-25T06:20:56.7575737Z includeif.gitdir:/github/workspace/_build_repo/.git/worktrees/*.path
+2026-09-25T06:20:56.7623262Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git.path
+2026-09-25T06:20:56.7872360Z D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:20:56.7917098Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git.path D\:\\a\\_temp\\git\-credentials\-8e16b717\-1651\-49f3\-aba6\-ef19de4c9d5e\.config
+2026-09-25T06:20:56.8217748Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git/worktrees/*.path
+2026-09-25T06:20:56.8472147Z D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:20:56.8515426Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/DSH-build/DSH-build/_build_repo/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-8e16b717\-1651\-49f3\-aba6\-ef19de4c9d5e\.config
+2026-09-25T06:20:56.8810197Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/_build_repo/.git.path
+2026-09-25T06:20:56.9053367Z /github/runner_temp/git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:20:56.9095263Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/_build_repo/.git.path \/github\/runner_temp\/git\-credentials\-8e16b717\-1651\-49f3\-aba6\-ef19de4c9d5e\.config
+2026-09-25T06:20:56.9389054Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/_build_repo/.git/worktrees/*.path
+2026-09-25T06:20:56.9637405Z /github/runner_temp/git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config
+2026-09-25T06:20:56.9722883Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/_build_repo/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-8e16b717\-1651\-49f3\-aba6\-ef19de4c9d5e\.config
+2026-09-25T06:20:57.0022563Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-25T06:20:57.5259267Z Removing credentials config 'D:\a\_temp\git-credentials-8e16b717-1651-49f3-aba6-ef19de4c9d5e.config'
+2026-09-25T06:20:57.5577726Z Post job cleanup.
+2026-09-25T06:20:57.7374621Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-25T06:20:57.7645359Z git version 2.55.0.windows.5
+2026-09-25T06:20:57.7708650Z Temporarily overriding HOME='D:\a\_temp\61cdedcc-b86a-45b9-88a1-003432070d02' before making global git config changes
+2026-09-25T06:20:57.7710104Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-25T06:20:57.7719762Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\DSH-build\DSH-build
+2026-09-25T06:20:57.8016407Z Removing SSH command configuration
+2026-09-25T06:20:57.8027884Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-25T06:20:57.8347031Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-25T06:20:58.3723894Z Removing HTTP extra header
+2026-09-25T06:20:58.3738711Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-25T06:20:58.4076141Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-25T06:20:58.9325546Z Removing includeIf entries pointing to credentials config files
+2026-09-25T06:20:58.9342283Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-25T06:20:58.9617792Z includeif.gitdir:D:/a/DSH-build/DSH-build/.git.path
+2026-09-25T06:20:58.9618407Z includeif.gitdir:D:/a/DSH-build/DSH-build/.git/worktrees/*.path
+2026-09-25T06:20:58.9618920Z includeif.gitdir:/github/workspace/.git.path
+2026-09-25T06:20:58.9619419Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-25T06:20:58.9661858Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/DSH-build/DSH-build/.git.path
+2026-09-25T06:20:58.9916769Z D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:20:58.9968193Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/DSH-build/DSH-build/.git.path D\:\\a\\_temp\\git\-credentials\-3ec56691\-e8d8\-4f8d\-8aab\-ae4030dc4f2a\.config
+2026-09-25T06:20:59.0278417Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/DSH-build/DSH-build/.git/worktrees/*.path
+2026-09-25T06:20:59.0530742Z D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:20:59.0577253Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/DSH-build/DSH-build/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-3ec56691\-e8d8\-4f8d\-8aab\-ae4030dc4f2a\.config
+2026-09-25T06:20:59.0879339Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-25T06:20:59.1128306Z /github/runner_temp/git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:20:59.1169593Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-3ec56691\-e8d8\-4f8d\-8aab\-ae4030dc4f2a\.config
+2026-09-25T06:20:59.1466284Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-25T06:20:59.1716828Z /github/runner_temp/git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config
+2026-09-25T06:20:59.1794998Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-3ec56691\-e8d8\-4f8d\-8aab\-ae4030dc4f2a\.config
+2026-09-25T06:20:59.2100709Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-25T06:20:59.7479795Z Removing credentials config 'D:\a\_temp\git-credentials-3ec56691-e8d8-4f8d-8aab-ae4030dc4f2a.config'
+2026-09-25T06:20:59.7680369Z Cleaning up orphan processes
