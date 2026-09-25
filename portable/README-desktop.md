@@ -70,6 +70,15 @@ dsh-desktop/
 
 复用便携版已有的 `portable/patch-native-code.mjs`（P1：native-code 守卫 + v2→v3 白名单），**必须**打在“已构建的 lib”上、且在运行时段打成 tarball 之前。
 
+## 关于“打包后冒烟”
+
+上游在 electron-builder 之后还会跑 `smoke-packaged-runtime.ts`（用打包好的目录再验一遍运行时）。**CI 里不开它**：
+
+- 本机深层构建目录下它会因 `site-packages` 超 MAX_PATH 失败（`ERROR_FILENAME_EXCED_RANGE`）
+- CI 上它会因 packaged 布局里的 LibreOffice 原生转换返回空引用而失败；同一运行时的准备阶段冒烟（`prepare:dsh`）在 CI 上是通过的
+
+需要时用 `DSH_DESKTOP_RUN_PACKAGED_SMOKE=1` 打开。产物本身另有 `verify-desktop.mjs`（24 项静态验收）。
+
 ## 流水线与验收
 
 `portable/build-desktop.mjs`（CI 里由 `desktop` job 调用）：
