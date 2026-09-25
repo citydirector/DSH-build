@@ -19,7 +19,9 @@ name: Build DSH
 #          不会出现「pin 指向 A、线上是 B」的错位；它同时是下次 schedule 的跳过判据。
 #   · main：只在晋升（把 dev 合过来）时更新 —— 于是 dsh-master-latest 永远是某个**确定的**
 #          上游提交的产物，随时可以重建；不再出现「当时的上游 HEAD 是什么就是什么」。
-#   跳过判定只对自动触发（schedule / push）生效；手动 dispatch 一律构建。
+#   跳过判定只对自动触发（schedule / push）生效，且要求**目标上游提交与胶水指纹都相同** ——
+#   只看上游会把"胶水改了但上游没动"的改动静默漏掉（实测踩过：晋升 PR 合进 main 却没动 pin，
+#   整轮直接跳过，新胶水一直没进稳定版）。手动 dispatch 一律构建。
 #
 # ── 晋升路径 ───────────────────────────────────────────────────────────────
 #   dev 验证 OK → gh pr create --base main --head dev → 合并 → main 上的 push 自动重建稳定版
@@ -101,6 +103,7 @@ jobs:
       skip: ${{ steps.resolve.outputs.skip }}
       sha: ${{ steps.resolve.outputs.sha }}
       short_sha: ${{ steps.resolve.outputs.short_sha }}
+      glue: ${{ steps.resolve.outputs.glue }}
     steps:
       # dev 通道要读上游 master 头，所以这里检出的就是上游仓库
       - uses: actions/checkout@v7
@@ -140,8 +143,19 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
 
-          # 跳过判定：手动 dispatch 一律构建；schedule / push 在「目标 == 上次发布的上游提交」时跳过。
-          # 上次发布的提交从 Release body 的 `upstream: <sha>` 行读（旧格式没有这行 → 不跳过）。
+          # 胶水指纹：本仓库内容里**除 pin 之外**的 blob 摘要（用 API 取，不必为算哈希多检出一次）。
+          # 跳过判定必须同时看它 —— 上游提交没动、但胶水改了（补丁脚本、workflow、启动器源码），
+          # 产物是会变的。只看上游的话，这类改动静默地出不了货（实测踩到过：晋升 PR 合进 main
+          # 却没动 pin，于是整轮直接跳过，新胶水一直没进稳定版）。
+          # 排除 pin 是关键：dev 每次发布后都会推进 pin，那不改变产物、不该触发重建。
+          glue="$(gh api "repos/$GITHUB_REPOSITORY/git/trees/${{ github.sha }}?recursive=1" \
+                  --jq '[.tree[] | select(.path != "portable/upstream.pin") | "\(.path):\(.sha)"] | sort | join("\n")' \
+                  | sha256sum | cut -c1-16)"
+          echo "glue=$glue" >> "$GITHUB_OUTPUT"
+          echo "🧬 胶水指纹 = $glue"
+
+          # 跳过判定：手动 dispatch 一律构建；schedule / push 在「目标上游提交相同 **且** 胶水指纹相同」
+          # 时跳过。两个来源都从 Release body 机器可读行读（旧格式缺行 → 不跳过，迁移期安全）。
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "🔨 手动触发：直接构建"
@@ -150,12 +164,13 @@ jobs:
           body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
                   "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$tag" | jq -r .body || true)"
           last="$(printf '%s' "$body" | sed -n 's/^upstream: \([0-9a-f]\{40\}\).*/\1/p')"
-          if [ -n "$last" ] && [ "$last" = "$sha" ]; then
+          last_glue="$(printf '%s' "$body" | sed -n 's/^glue: \([0-9a-f]\{16\}\).*/\1/p')"
+          if [ -n "$last" ] && [ -n "$last_glue" ] && [ "$last" = "$sha" ] && [ "$last_glue" = "$glue" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "✅ $tag 已经是这个提交（$sha），跳过"
+            echo "✅ $tag 已经是这个上游提交 + 这套胶水（$sha / $glue），跳过"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "📦 $tag: ${last:-<无记录>} → $sha"
+            echo "📦 $tag: 上游 ${last:-<无记录>} → $sha ；胶水 ${last_glue:-<无记录>} → $glue"
           fi
 
   # -------- npm tarball 集合（ubuntu） --------
@@ -505,6 +520,7 @@ jobs:
           CHANNEL: ${{ needs.check.outputs.channel }}
           UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
           GLUE_SHA: ${{ github.sha }}
+          GLUE: ${{ needs.check.outputs.glue }}
         run: |
           # dev 是 pre-release（不污染稳定 latest）；main 是正式版。
           prerelease=""
@@ -516,8 +532,8 @@ jobs:
             TITLE="DSH dev"
             NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复。首次以本版本启动时会自动把本地 v2/v3 会话迁移到 v4（一次性、可回滚）。稳定版请用 dsh-master-latest。"
           fi
-          # 机器可读的尾部：check 的跳过判定读的就是这里的 `upstream:` 行，别再改格式。
-          NOTES="$(printf '%s\n\nupstream: %s\nchannel: %s\nbuilt-from: %s' "$NOTES" "$UPSTREAM_SHA" "$CHANNEL" "$GLUE_SHA")"
+          # 机器可读的尾部：check 的跳过判定读的就是这里的 `upstream:` 与 `glue:` 两行，别再改格式。
+          NOTES="$(printf '%s\n\nupstream: %s\nglue: %s\nchannel: %s\nbuilt-from: %s' "$NOTES" "$UPSTREAM_SHA" "$GLUE" "$CHANNEL" "$GLUE_SHA")"
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TITLE ($(date +%Y%m%d))" \
@@ -525,8 +541,9 @@ jobs:
             $prerelease \
             artifacts/*/*.zip
 
-      # dev 通道：发布成功后才推进 pin，让 pin 永远等于「dev 通道当前产物对应的上游提交」。
-      # 它既是 git log dev 上「跟到哪儿了」的记录，也是下一次 schedule 的跳过判据。
+      # dev 通道：发布成功后才推进 pin，让 pin 永远等于「dev 通道当前产物对应的上游提交」——
+      # 也就是 git log dev 上「跟到哪儿了」的记录。（跳过判定不看 pin，看 Release body 的
+      # `upstream:`/`glue:` 两行；pin 提交本身不改胶水指纹，所以不会误触发重建。）
       # （用 GITHUB_TOKEN 推送不会再触发 workflow，不会自我循环。）
       - name: Advance the upstream pin (dev only)
         if: needs.check.outputs.channel == 'dev'
