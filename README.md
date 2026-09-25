@@ -22,7 +22,7 @@
 
 - **通道由你所在的分支决定**，不再由事件类型猜：在 dev 上跑（含每日任务）→ dev 通道；在 main 上跑 → 稳定通道；临时分支上手动 dispatch 也走 dev 通道（验证用，不碰稳定标签）。
 - **`portable/upstream.pin` 是一行上游 commit sha**，含义是"本通道当前产物对应的上游提交"。它让 `dsh-master-latest` **可复现**——随时能重建出同一个提交的产物，而不是"当时的上游 HEAD 是什么就是什么"。dev 侧的 pin 只在上传成功后推进，所以它不会出现"pin 指向 A、线上是 B"的错位。
-- **跳过判定**：自动触发时，若目标提交与上次发布相同就跳过（省 CI）；**手动触发一律构建**。
+- **跳过判定**：自动触发时，只有**目标上游提交 + 胶水指纹**都和上次发布的一致才跳过（省 CI）。胶水指纹 = 本仓库内容里除 pin 之外的 blob 摘要：上游没动但胶水改了（补丁脚本、workflow、启动器源码）仍会重建——只看上游会把这种改动静默漏掉（实测踩过：晋升 PR 合进 main 却没动 pin，整轮直接跳过）。**手动触发一律构建**。
 - **晋升**：dev 验证 OK → `gh pr create --base main --head dev` → 合并 → main 的 push 自动重建稳定版。PR 里只有胶水 + 一行 pin，可 review。
 - ⚠️ **别把 pin 往回退到 0.1.7 之前的提交**：那些版本没有 v3/v4 会话编解码，会把已迁移到 v4 的会话读成"未知的新代际"。
 
@@ -137,7 +137,7 @@ Actions 页面 → **Build DSH** → `Run workflow`，**在哪个分支上点就
 
 - `check` 用 `github.ref_name` 定通道：`main` → 目标 = `portable/upstream.pin`；其它 → 目标 = 上游 `master` 头
 - 下游所有 job 都用 `check` 解析出的**那个**上游 sha 检出上游，不用 `master`——否则 check 与真正构建的可能不是同一个提交
-- Release body 末尾有机器可读三行（`upstream:` / `channel:` / `built-from:`），跳过判定读的就是 `upstream:` 行
+- Release body 末尾有机器可读四行（`upstream:` / `glue:` / `channel:` / `built-from:`），跳过判定读的就是前两行
 - dev 发布成功后自动提交 `chore(dev): track upstream <sha>`（`GITHUB_TOKEN` 推送不会再触发 workflow，不会自我循环）
 - pnpm 版本由 workflow 顶层 `PNPM_VERSION` 单一控制（当前 11.27.1）；每次调用都带 `--pm-on-fail=ignore`，并且 checkout 后会把上游 `packageManager` 对齐到该版本（不这么做会被静默回退到 11.7.0）
 - 便携包用 `pnpm --filter @deepseek-ai/dsh deploy --legacy --config.node-linker=hoisted` 链（**不加** `--prod`：dsh 运行时插件在 devDependencies，靠 cordis 动态加载），再用 `patch-peers.mjs` / `patch-dep.mjs` 补齐 deploy 系统性漏掉的依赖，最后跑真 boot 冒烟测试
