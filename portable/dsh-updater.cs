@@ -485,11 +485,16 @@ class DshUpdater
         return m.Success ? m.Groups[1].Value : "";
     }
 
-    // Release body 形如 "Auto build master@<40位sha>"
+    // 上游提交号的两种来源：
+    //   1. Release body 形如 "Auto build master@<40位sha>"（历史格式）
+    //   2. DSH-build 自己的 Release：机器可读行 `upstream: <40位sha>`
+    //      （body 里还有 glue/built-from 两行，都是本仓库的 sha，不能泛匹配 40 位十六进制）
     static string ExtractSha(string json)
     {
-        Match m = Regex.Match(json, "@([0-9a-f]{40})");
-        return m.Success ? m.Groups[1].Value : "";
+        Match direct = Regex.Match(json, "@([0-9a-f]{40})");
+        if (direct.Success) return direct.Groups[1].Value;
+        Match upstream = Regex.Match(json, "upstream:\\s*([0-9a-f]{40})");
+        return upstream.Success ? upstream.Groups[1].Value : "";
     }
 
     static string FindAsset(string json, string prefix)
