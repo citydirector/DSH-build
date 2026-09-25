@@ -81,6 +81,25 @@
 - **前置条件**：`portable/patch-native-code.mjs` 的补丁 2 —— 改动点是 v2→v3 的白名单补 `instruction-hint`，覆盖面是**整条 v2→v3→v4 链**（catalog 的 migrations 图链式推进，v2 会话必须先过 v2→v3；也就是批量迁移器能 0 拒绝的前置条件）。否则含旧 AGENTS.md 提示消息的会话会在迁移时报 `cannot safely transform unclassified message source`。构建流程已自动应用。
 - ⚠️ **单向性**：迁移完成后，旧版（如仍停在 76fda72 的 `dsh-master-latest`）**读不出 v4 会话**（"future highest generation" 会被拒绝）。所以要么留在 dev 通道，要么先回滚再切回稳定版。
 
+### 更新后自查：随包是否撑得住你的 bundle
+
+插件面板的分区靠两个**硬编码名单**（客户端 `BUILTIN_PROFILE_BUNDLES`、宿主 `OPTIONAL_BUNDLES`），而 profile 的 `dsh.profile.bundles` 与 `dependencies` 是**解耦**的：选中一个 bundle ≠ 安装它，能否解析完全看随包内容；面板上的开关（`setBundleEnabled`）只改 `dsh.profile.bundles`、**不会安装**。所以一个"选中但没随包"的 bundle 只会在启动时行加载失败——只有你机器上看得见。
+
+`portable/check-bundles.mjs` 就是查这个（名单从**已部署的包**里解析，不写死）：
+
+```powershell
+# 只验随包（DEFAULT ∪ OPTIONAL ∪ BUILTIN 是否都在 app/node_modules 里）
+node D:\DSHWorkspace\DSH-Protable\DSH-build\portable\check-bundles.mjs 'D:\dsh-portable\app\node_modules'
+
+# 连你自己的 profile 一起验：每个声明的 bundle 靠谁兜住
+node D:\DSHWorkspace\DSH-Protable\DSH-build\portable\check-bundles.mjs 'D:\dsh-portable\app\node_modules' --profile 'D:\dsh-portable\data\profiles\web'
+
+# 证明它真的会报错（拿假树跑一遍，缺 bundle 时必须返回 1）
+node ...\check-bundles.mjs --self-test
+```
+
+退出码：`0` 干净、`1` 有悬空 bundle、`2` 名单解析失败（上游改了写法，需人工看）。CI 的 portable job 在 boot 冒烟之后也跑一遍（拿随包的默认 profile 当被测对象）。
+
 
 ### 目录结构
 
@@ -123,6 +142,7 @@ Actions 页面 → **Build DSH** → `Run workflow`，**在哪个分支上点就
 - pnpm 版本由 workflow 顶层 `PNPM_VERSION` 单一控制（当前 11.27.1）；每次调用都带 `--pm-on-fail=ignore`，并且 checkout 后会把上游 `packageManager` 对齐到该版本（不这么做会被静默回退到 11.7.0）
 - 便携包用 `pnpm --filter @deepseek-ai/dsh deploy --legacy --config.node-linker=hoisted` 链（**不加** `--prod`：dsh 运行时插件在 devDependencies，靠 cordis 动态加载），再用 `patch-peers.mjs` / `patch-dep.mjs` 补齐 deploy 系统性漏掉的依赖，最后跑真 boot 冒烟测试
 - 构建产物自动打本地兼容性补丁（`portable/patch-native-code.mjs`，幂等、可自愈）：lossless-JSON 守卫（含字面量内转义）+ 迁移白名单 kind；单测在 `tests/patch-native-code.test.mjs`，CI 里跑
+- boot 冒烟之后跑 `portable/check-bundles.mjs`：随包必须撑得住它宣称的 bundle（名单从已部署的包里解析），否则构建失败
 - 会话迁移器由 `portable/build-migrator.mjs` 在构建期把上游 `scripts/migrate-sessions-to-v4.ts` 打成单文件 ESM（相对 import 内联、`@deepseek-ai/*` 保持 external），随包分发
 - 启动器/更新器源码在 `portable/`，workflow 内用 `.NET Framework 4.8` 的 `csc` 编译
 - 通知使用 Server3（secrets：`SC3_UID` / `SC3_SENDKEY`），未配置则静默跳过
