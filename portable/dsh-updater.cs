@@ -1,5 +1,13 @@
-// dsh 便携版更新器（C# 5.0，.NET Framework 4.8 的 csc 编译）
-// 职责：读 VERSION → 查 GitHub 最新 Release → 有更新则下载 zip → robocopy 原地覆盖（保留 data/）
+// dsh 便携版 / 桌面版更新器（C# 5.0，.NET Framework 4.8 的 csc 编译）
+// 职责：读 VERSION → 查 GitHub Release → 有更新则下载 zip → robocopy 原地覆盖（保留 data/）
+//
+// 包身份由可执行文件旁的 update.json 描述（可选）：
+//   { "kind": "desktop", "repo": "owner/name",
+//     "channelTags": { "main": "dsh-master-latest", "dev": "dsh-dev-latest" },
+//     "assetPrefix": "dsh-desktop-win64", "versionFile": "VERSION", "mirror": ".",
+//     "preserve": ["data"], "processNames": ["DeepSeek Harness"],
+//     "expectEntry": "DeepSeek Harness.exe", "zipName": "dsh-desktop.zip" }
+// 没有 update.json 时完全保持原便携版行为（app/node 镜像 + dsh-portable-win64 + releases/latest）。
 // 绿色：不写注册表、不写 C 盘用户目录；一切在程序目录内完成。
 
 using System;
@@ -40,15 +48,25 @@ class DshUpdater
         ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; // Tls12
 
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        string versionFile = Path.Combine(baseDir, "VERSION");
+        PackageManifest manifest = PackageManifest.Load(baseDir);
+        if (manifest != null)
+        {
+            Console.WriteLine("包身份: " + manifest.Kind + "（资产前缀 " + (manifest.AssetPrefix == "" ? "dsh-portable-win64" : manifest.AssetPrefix) + "）");
+        }
+        string versionFile = Path.Combine(baseDir, manifest == null ? "VERSION" : manifest.VersionFile);
         string current = File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "";
 
         Console.WriteLine("检查更新中... 当前版本: " + (current.Length >= 7 ? current.Substring(0, 7) : (current == "" ? "未知" : current)));
 
         string channel = ChooseChannel();
+        string repo = manifest == null || manifest.Repo == "" ? Repo : manifest.Repo;
+        string devTag = manifest == null || manifest.DevTag == "" ? "dsh-dev-latest" : manifest.DevTag;
+        string mainTag = manifest == null ? "" : manifest.MainTag;
         string releaseUrl = channel == "dev"
-            ? "https://api.github.com/repos/" + Repo + "/releases/tags/dsh-dev-latest"
-            : "https://api.github.com/repos/" + Repo + "/releases/latest";
+            ? "https://api.github.com/repos/" + repo + "/releases/tags/" + devTag
+            : (mainTag == ""
+                ? "https://api.github.com/repos/" + repo + "/releases/latest"
+                : "https://api.github.com/repos/" + repo + "/releases/tags/" + mainTag);
         string json = HttpGet(releaseUrl);
         if (json == null)
         {
@@ -70,10 +88,11 @@ class DshUpdater
             }
         }
 
-        string assetUrl = FindPortableAsset(json);
+        string assetPrefix = manifest == null || manifest.AssetPrefix == "" ? "dsh-portable-win64" : manifest.AssetPrefix;
+        string assetUrl = FindAsset(json, assetPrefix);
         if (assetUrl == null)
         {
-            Console.Error.WriteLine("最新 Release 中未找到便携版 zip。");
+            Console.Error.WriteLine("Release 中未找到匹配资产（前缀 " + assetPrefix + "）。");
             return 1;
         }
 
@@ -82,7 +101,7 @@ class DshUpdater
 
         string updateDir = Path.Combine(baseDir, "data", ".update");
         Directory.CreateDirectory(updateDir);
-        string zipPath = Path.Combine(updateDir, "dsh-portable.zip");
+        string zipPath = Path.Combine(updateDir, manifest == null || manifest.ZipName == "" ? "dsh-portable.zip" : manifest.ZipName);
         string newDir = Path.Combine(updateDir, "new");
 
         if (!Download(assetUrl, zipPath))
@@ -97,32 +116,59 @@ class DshUpdater
             return 1;
         }
 
-        if (IsDshRunning(baseDir))
+        // 结构校验：包内必须出现清单声明的入口，否则不做半截覆盖（未声明则跳过）
+        if (manifest != null && manifest.ExpectEntry != "")
         {
-            Console.Error.WriteLine("检测到 dsh 正在运行，请先关闭 dsh 再执行更新。");
+            if (!File.Exists(Path.Combine(newDir, manifest.ExpectEntry.Replace('/', Path.DirectorySeparatorChar))))
+            {
+                Console.Error.WriteLine("更新包结构不符：缺少 " + manifest.ExpectEntry + "，已中止。");
+                return 1;
+            }
+        }
+
+        if (IsDshRunning(baseDir, manifest))
+        {
+            Console.Error.WriteLine("检测到 " + (manifest == null ? "dsh" : manifest.Kind) + " 正在运行，请先关闭再执行更新。");
             return 1;
         }
 
         // 更新前备份旧版本（app/node/启动器/版本/更新器），出问题可回滚
-        BackupOld(baseDir);
+        // 更新前备份旧版本，出问题可回滚（便携版备份 app/node，桌面版备份整棵程序树）
+        if (manifest == null) BackupOld(baseDir); else BackupTree(baseDir, manifest);
 
         // 生成延迟覆盖脚本，规避覆盖正在运行的 update.exe 自身的锁
         string applyCmd = Path.Combine(updateDir, "apply-update.cmd");
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("@echo off");
         sb.AppendLine("timeout /t 1 /nobreak >nul");
-        // 只镜像 app/node 两个子目录 + 复制几个顶层文件；不用整目录 /MIR，
-        // 避免删掉根目录里用户自己放的文件（如 update.exe 的备份）。
-        sb.AppendLine("robocopy \"" + newDir + "\\app\" \"" + baseDir.TrimEnd('\\') + "\\app\" /MIR /NFL /NDL /NJH /NJS");
-        sb.AppendLine("if errorlevel 8 exit /b 1");
-        sb.AppendLine("robocopy \"" + newDir + "\\node\" \"" + baseDir.TrimEnd('\\') + "\\node\" /MIR /NFL /NDL /NJH /NJS");
-        sb.AppendLine("if errorlevel 8 exit /b 1");
-        sb.AppendLine("timeout /t 2 /nobreak >nul");
-        // 自替换 update.exe：此时旧进程已退出(返回42)，应可覆盖。
-        sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
-        sb.AppendLine("copy /y \"" + newDir + "\\dsh.exe\" \"" + baseDir.TrimEnd('\\') + "\\dsh.exe\"");
-        sb.AppendLine("copy /y \"" + newDir + "\\VERSION\" \"" + baseDir.TrimEnd('\\') + "\\VERSION\"");
-        sb.AppendLine("exit /b 0");
+        if (manifest == null || manifest.Mirror != ".")
+        {
+            // 便携版：只镜像 app/node 两个子目录 + 复制几个顶层文件；不用整目录 /MIR，
+            // 避免删掉根目录里用户自己放的文件（如 update.exe 的备份）。
+            sb.AppendLine("robocopy \"" + newDir + "\\app\" \"" + baseDir.TrimEnd('\\') + "\\app\" /MIR /NFL /NDL /NJH /NJS");
+            sb.AppendLine("if errorlevel 8 exit /b 1");
+            sb.AppendLine("robocopy \"" + newDir + "\\node\" \"" + baseDir.TrimEnd('\\') + "\\node\" /MIR /NFL /NDL /NJH /NJS");
+            sb.AppendLine("if errorlevel 8 exit /b 1");
+            sb.AppendLine("timeout /t 2 /nobreak >nul");
+            // 自替换 update.exe：此时旧进程已退出(返回42)，应可覆盖。
+            sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
+            sb.AppendLine("copy /y \"" + newDir + "\\dsh.exe\" \"" + baseDir.TrimEnd('\\') + "\\dsh.exe\"");
+            sb.AppendLine("copy /y \"" + newDir + "\\VERSION\" \"" + baseDir.TrimEnd('\\') + "\\VERSION\"");
+        }
+        else
+        {
+            // 桌面版/整目录镜像：/MIR 覆盖程序文件，/XD 把用户状态目录整棵排除在外。
+            string xd = "";
+            foreach (string keep in manifest.Preserve)
+            {
+                xd += " /XD \"" + Path.Combine(baseDir, keep) + "\"";
+            }
+            sb.AppendLine("robocopy \"" + newDir + "\" \"" + baseDir.TrimEnd('\\') + "\" /MIR /NFL /NDL /NJH /NJS" + xd);
+            sb.AppendLine("if errorlevel 8 exit /b 1");
+            sb.AppendLine("timeout /t 2 /nobreak >nul");
+            sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
+            sb.AppendLine("copy /y \"" + newDir + "\\" + manifest.VersionFile + "\" \"" + baseDir.TrimEnd('\\') + "\\" + manifest.VersionFile + "\"");
+        }
         File.WriteAllText(applyCmd, sb.ToString());
 
         ProcessStartInfo psi = new ProcessStartInfo();
@@ -446,13 +492,13 @@ class DshUpdater
         return m.Success ? m.Groups[1].Value : "";
     }
 
-    static string FindPortableAsset(string json)
+    static string FindAsset(string json, string prefix)
     {
         MatchCollection matches = Regex.Matches(json, "\"browser_download_url\":\\s*\"([^\"]*)\"");
         foreach (Match m in matches)
         {
             string url = m.Groups[1].Value.Replace("\\/", "/");
-            if (url.IndexOf("dsh-portable-win64", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (url.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return url;
             }
@@ -460,9 +506,146 @@ class DshUpdater
         return null;
     }
 
-    static bool IsDshRunning(string baseDir)
+    // ---- 包身份清单（update.json，可选）----
+    // 存在时按清单更新；缺失时**完全保持原便携版行为**（app/node 镜像 + dsh-portable-win64 资产 + releases/latest）。
+    class PackageManifest
     {
-        string[] names = new string[] { "node", "dsh" };
+        public string Kind = "portable";
+        public string Repo = "";
+        public string MainTag = "";
+        public string DevTag = "";
+        public string AssetPrefix = "";
+        public string VersionFile = "VERSION";
+        public string Mirror = "";
+        public string ExpectEntry = "";
+        public string ZipName = "";
+        public List<string> Preserve = new List<string>();
+        public List<string> ProcessNames = new List<string>();
+
+        // 读取可执行文件旁的 update.json；不存在/损坏 → 返回 null（按便携版默认行为继续）
+        public static PackageManifest Load(string baseDir)
+        {
+            try
+            {
+                string path = Path.Combine(baseDir, "update.json");
+                if (!File.Exists(path)) return null;
+                string json = File.ReadAllText(path);
+                PackageManifest m = new PackageManifest();
+                string kind = JsonValue(json, "kind"); if (kind != "") m.Kind = kind;
+                m.Repo = JsonValue(json, "repo");
+                m.AssetPrefix = JsonValue(json, "assetPrefix");
+                string vf = JsonValue(json, "versionFile"); if (vf != "") m.VersionFile = vf;
+                string mirror = JsonValue(json, "mirror"); if (mirror != "") m.Mirror = mirror;
+                m.ExpectEntry = JsonValue(json, "expectEntry");
+                m.ZipName = JsonValue(json, "zipName");
+                Match tags = Regex.Match(json, "\"channelTags\"\\s*:\\s*\\{([^}]*)\\}");
+                if (tags.Success)
+                {
+                    m.MainTag = JsonValue(tags.Groups[1].Value, "main");
+                    m.DevTag = JsonValue(tags.Groups[1].Value, "dev");
+                }
+                m.Preserve = JsonArray(json, "preserve");
+                m.ProcessNames = JsonArray(json, "processNames");
+                // 整目录镜像必须至少保留用户状态目录，否则更新会连 data 一起镜像掉。
+                if (m.Mirror == "." && m.Preserve.Count == 0) m.Preserve.Add("data");
+                return m;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("读取 update.json 失败，按便携版默认行为继续: " + ex.Message);
+                return null;
+            }
+        }
+    }
+
+    static List<string> JsonArray(string json, string key)
+    {
+        List<string> items = new List<string>();
+        Match m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*\\[([^\\]]*)\\]");
+        if (!m.Success) return items;
+        foreach (Match item in Regex.Matches(m.Groups[1].Value, "\"([^\"]*)\""))
+        {
+            items.Add(item.Groups[1].Value);
+        }
+        return items;
+    }
+
+    // 整目录镜像模式的备份：备份包内除用户状态外的全部文件（Electron 体积大，用压缩）。
+    static void BackupTree(string baseDir, PackageManifest manifest)
+    {
+        try
+        {
+            List<string[]> files = new List<string[]>();
+            CollectTree(files, baseDir, "", manifest.Preserve);
+            if (files.Count == 0)
+            {
+                Console.WriteLine("没有可备份的文件，跳过备份。");
+                return;
+            }
+            string backupDir = Path.Combine(baseDir, "data", "backups");
+            Directory.CreateDirectory(backupDir);
+            string zipPath = Path.Combine(backupDir, "dsh-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
+            Console.WriteLine("正在备份 " + files.Count + " 个文件...");
+            using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                int done = 0;
+                int lastPct = -1;
+                foreach (string[] item in files)
+                {
+                    using (Stream src = File.OpenRead(item[0]))
+                    using (Stream dst = zip.CreateEntry(item[1], CompressionLevel.Optimal).Open())
+                    {
+                        src.CopyTo(dst);
+                    }
+                    done++;
+                    int pct = (int)((long)done * 100 / files.Count);
+                    if (pct != lastPct)
+                    {
+                        lastPct = pct;
+                        Console.Write("{0}备份中... {1}%（{2}/{3} 文件）  ", "\r", pct, done, files.Count);
+                    }
+                }
+            }
+            Console.WriteLine();
+            Console.WriteLine("已备份旧版本: " + zipPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("备份旧版本失败（继续更新）: " + ex.Message);
+        }
+    }
+
+    static void CollectTree(List<string[]> list, string dir, string prefix, List<string> skip)
+    {
+        foreach (string sd in Directory.GetDirectories(dir))
+        {
+            string name = Path.GetFileName(sd);
+            bool skipped = false;
+            foreach (string keep in skip)
+            {
+                if (string.Equals(name, keep, StringComparison.OrdinalIgnoreCase)) { skipped = true; break; }
+            }
+            if (skipped) continue;
+            CollectTree(list, sd, prefix + name + "/", skip);
+        }
+        foreach (string file in Directory.GetFiles(dir))
+        {
+            list.Add(new string[] { file, prefix + Path.GetFileName(file) });
+        }
+    }
+
+    static bool IsDshRunning(string baseDir, PackageManifest manifest)
+    {
+        List<string> names = new List<string>();
+        if (manifest == null || manifest.ProcessNames.Count == 0)
+        {
+            names.Add("node");
+            names.Add("dsh");
+        }
+        else
+        {
+            foreach (string name in manifest.ProcessNames) names.Add(name);
+        }
         foreach (string name in names)
         {
             Process[] procs = Process.GetProcessesByName(name);

@@ -1,0 +1,7 @@
+# 本地干跑与 CI 产物（CI 里这些落在上游检出目录，不进本仓库）
+/desktop-build/
+/dsh-desktop-win64-*.zip
+/tmp/
+/_*.exe
+/portable/update.exe
+/portable/dsh.exe

@@ -39,6 +39,7 @@ name: Build DSH
 #   两个产物：
 #     1. npm tarball 集合（ubuntu，官方 release:pack 链）
 #     2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe + update.exe）
+#     3. Windows 桌面端绿色包（windows，Electron 外壳 + 内置 dsh 运行时，同一 release 挂 dsh-desktop-win64-*.zip）
 #   关键：下游所有 job 都用 check 解析出的**那个**上游 sha 检出上游，不用 master ——
 #         否则 check 与真正构建的提交可能不是同一个（上游在 run 期间前进了）。
 
@@ -53,8 +54,16 @@ on:
       - "portable/**"
       - "tests/**"
       - ".github/workflows/**"
-  # 手动触发一律构建（不跳过）：临时分支上跑也走 dev 通道，用来验证流水线。
-  workflow_dispatch: {}
+  # 手动触发一律构建（不跳过）。channel 默认 auto = 跟随分支；
+  # 显式选 main 只刷 dsh-master-latest（稳定 tag），选 dev 只刷 dsh-dev-latest（预发布 tag）——
+  # 这样在 main 分支上手动验证流水线时不会误刷稳定通道。
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "构建通道：auto=跟随分支，main=只刷稳定 tag，dev=只刷预发布 tag"
+        type: choice
+        options: [auto, dev, main]
+        default: auto
 
 permissions:
   contents: write
@@ -119,6 +128,13 @@ jobs:
           channel=dev
           tag=dsh-dev-latest
           if [ "${{ github.ref_name }}" = "main" ]; then channel=main; tag=dsh-master-latest; fi
+          # 手动触发可用 inputs.channel 覆盖分支推导（auto 保持上面的结果）
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ inputs.channel }}" in
+              main) channel=main; tag=dsh-master-latest ;;
+              dev)  channel=dev;  tag=dsh-dev-latest ;;
+            esac
+          fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
 
@@ -488,9 +504,89 @@ jobs:
           path: dsh-portable-win64-*.zip
           retention-days: 7
 
+  # -------- 桌面端绿色包（windows，Electron 外壳 + 内置 dsh 运行时） --------
+  # 与 portable 同一上游提交、同一 Release：产物 dsh-desktop-win64-<sha>.zip 由 release job 一并挂上。
+  # 与便携版的差别：用上游**自己的**依赖布局（isolated linker）与 Electron 运行时；
+  # 我们的兼容性补丁由 portable/patch-desktop-*.mjs 在构建期打进去（顺序见 build-desktop.mjs 头注释）。
+  desktop:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          path: _build_repo
+
+      # 与 portable job 相同：把上游钉的 packageManager 对齐到我们要跑的 pnpm
+      - name: Align packageManager pin with the pnpm we run
+        shell: pwsh
+        run: |
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
+          node -p "require('./package.json').packageManager"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          pnpm --version
+          node --version
+
+      # 桌面端不部署，所以**不加** node-linker=hoisted：prepare-*/electron-builder 都按上游 workspace 布局写的。
+      - name: Install dependencies (workspace default linker)
+        shell: pwsh
+        run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true
+
+      - name: Run desktop patch tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-desktop.test.mjs
+
+      # 编译清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
+      - name: Compile updater
+        shell: pwsh
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:exe /out:_build_repo\portable\update.exe `
+            /r:System.IO.Compression.FileSystem.dll `
+            /r:System.IO.Compression.dll `
+            _build_repo\portable\dsh-updater.cs
+          if (-not (Test-Path _build_repo\portable\update.exe)) { throw "update.exe 编译失败" }
+
+      - name: Build desktop green package
+        shell: pwsh
+        env:
+          DSH_DESKTOP_SOURCE: ${{ github.workspace }}
+          DSH_DESKTOP_TAG: ${{ needs.check.outputs.sha }}
+          DSH_DESKTOP_OUT: ${{ github.workspace }}\desktop-build
+          DSH_DESKTOP_UPDATE_EXE: ${{ github.workspace }}\_build_repo\portable\update.exe
+          # runner 的检出路径很短（D:\a\<repo>\<repo>），不会撞 MAX_PATH，所以打开打包后冒烟。
+          DSH_DESKTOP_RUN_PACKAGED_SMOKE: "1"
+        run: node _build_repo/portable/build-desktop.mjs
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dsh-desktop-win64
+          path: dsh-desktop-win64-*.zip
+          retention-days: 7
+
   # -------- 合并发布 --------
   release:
-    needs: [check, npm, portable]
+    needs: [check, npm, portable, desktop]
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
@@ -581,7 +677,7 @@ jobs:
   # release 也放进 needs：只依赖 check/npm/portable 的话，release 自己失败（例如 pin
   # 提交那一步）不会有任何通知 —— 这个坑当场踩到过一次。
   notify-failure:
-    needs: [check, npm, portable, release]
+    needs: [check, npm, portable, desktop, release]
     if: failure()
     runs-on: ubuntu-latest
     steps:
