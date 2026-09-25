@@ -46,7 +46,10 @@ dsh-desktop/
 ```
 
 - 只认 **`dsh-desktop-win64-*`** 资产（不会误拉便携版）；通道 tag 与便携版相同，按 `2` 切 dev
-- 覆盖方式：`robocopy /MIR /XD <包>\data` —— **只换程序，`data/` 整棵不动**；覆盖前自动备份到 `data/backups/`
+- 覆盖方式：**逐顶层条目镜像**（跳过清单 `preserve` 声明的目录）—— 只换程序，`data/` 整棵不动；覆盖前自动备份到 `data/backups/`
+  - 不用整目录 `/MIR` + `/XD`：实测 robocopy 的 `/XD` **只按相对名匹配**，传绝对路径不生效，会把 `data/` 一起镜像掉
+
+  - 生成的覆盖脚本里系统工具一律走绝对路径（`%SystemRoot%\System32\robocopy.exe` / `timeout.exe`）：调用方的 PATH 可能被裁剪，裸命令会 `not recognized` 让整个脚本静默失败
 - 桌面端在运行时拒绝更新（进程名来自清单的 `processNames`）；更新包缺 `expectEntry` 时中止，不做半截覆盖
 - 没有 `update.json` 的包（便携版）→ 行为与原来逐字节一致：app/node 镜像 + `dsh-portable-win64` + `releases/latest`
 

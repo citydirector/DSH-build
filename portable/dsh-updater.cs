@@ -140,16 +140,20 @@ class DshUpdater
         string applyCmd = Path.Combine(updateDir, "apply-update.cmd");
         StringBuilder sb = new StringBuilder();
         sb.AppendLine("@echo off");
-        sb.AppendLine("timeout /t 1 /nobreak >nul");
+        // 系统工具一律用绝对路径：调用方的 PATH 可能被裁剪（受限环境/脚本拉起），
+        // 裸 robocopy/timeout 会 "not recognized"，让整个覆盖脚本静默失败。
+        string robocopy = SystemTool("robocopy.exe");
+        string timeout = SystemTool("timeout.exe");
+        sb.AppendLine("\"" + timeout + "\" /t 1 /nobreak >nul");
         if (manifest == null || manifest.Mirror != ".")
         {
             // 便携版：只镜像 app/node 两个子目录 + 复制几个顶层文件；不用整目录 /MIR，
             // 避免删掉根目录里用户自己放的文件（如 update.exe 的备份）。
-            sb.AppendLine("robocopy \"" + newDir + "\\app\" \"" + baseDir.TrimEnd('\\') + "\\app\" /MIR /NFL /NDL /NJH /NJS");
+            sb.AppendLine("\"" + robocopy + "\" \"" + newDir + "\\app\" \"" + baseDir.TrimEnd('\\') + "\\app\" /MIR /NFL /NDL /NJH /NJS");
             sb.AppendLine("if errorlevel 8 exit /b 1");
-            sb.AppendLine("robocopy \"" + newDir + "\\node\" \"" + baseDir.TrimEnd('\\') + "\\node\" /MIR /NFL /NDL /NJH /NJS");
+            sb.AppendLine("\"" + robocopy + "\" \"" + newDir + "\\node\" \"" + baseDir.TrimEnd('\\') + "\\node\" /MIR /NFL /NDL /NJH /NJS");
             sb.AppendLine("if errorlevel 8 exit /b 1");
-            sb.AppendLine("timeout /t 2 /nobreak >nul");
+            sb.AppendLine("\"" + timeout + "\" /t 2 /nobreak >nul");
             // 自替换 update.exe：此时旧进程已退出(返回42)，应可覆盖。
             sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
             sb.AppendLine("copy /y \"" + newDir + "\\dsh.exe\" \"" + baseDir.TrimEnd('\\') + "\\dsh.exe\"");
@@ -157,17 +161,24 @@ class DshUpdater
         }
         else
         {
-            // 桌面版/整目录镜像：/MIR 覆盖程序文件，/XD 把用户状态目录整棵排除在外。
-            string xd = "";
-            foreach (string keep in manifest.Preserve)
+            // 桌面版（整目录镜像）：**逐顶层条目**镜像，跳过 preserve 里声明的用户状态目录。
+            // 不用整目录 /MIR + /XD：实测带绝对路径的 /XD 不生效（robocopy 只按相对名匹配），
+            // 会把 data/ 一起镜像掉。按条目镜像既精确，又不依赖 /XD 的匹配语义。
+            foreach (string directory in Directory.GetDirectories(newDir))
             {
-                xd += " /XD \"" + Path.Combine(baseDir, keep) + "\"";
+                string name = Path.GetFileName(directory);
+                if (manifest.IsPreserved(name)) continue;
+                sb.AppendLine("\"" + robocopy + "\" \"" + directory + "\" \"" + Path.Combine(baseDir, name) + "\" /MIR /NFL /NDL /NJH /NJS");
+                sb.AppendLine("if errorlevel 8 exit /b 1");
             }
-            sb.AppendLine("robocopy \"" + newDir + "\" \"" + baseDir.TrimEnd('\\') + "\" /MIR /NFL /NDL /NJH /NJS" + xd);
-            sb.AppendLine("if errorlevel 8 exit /b 1");
-            sb.AppendLine("timeout /t 2 /nobreak >nul");
-            sb.AppendLine("copy /y \"" + newDir + "\\update.exe\" \"" + baseDir.TrimEnd('\\') + "\\update.exe\"");
-            sb.AppendLine("copy /y \"" + newDir + "\\" + manifest.VersionFile + "\" \"" + baseDir.TrimEnd('\\') + "\\" + manifest.VersionFile + "\"");
+            // 根目录文件（含 DeepSeek Harness.exe / VERSION / update.exe）逐个覆盖；
+            // 不删根目录里多出来的文件——和便携版一样，避免误删用户自己放的东西。
+            foreach (string file in Directory.GetFiles(newDir))
+            {
+                string name = Path.GetFileName(file);
+                if (manifest.IsPreserved(name)) continue;
+                sb.AppendLine("copy /y \"" + file + "\" \"" + Path.Combine(baseDir, name) + "\"");
+            }
         }
         File.WriteAllText(applyCmd, sb.ToString());
 
@@ -479,6 +490,13 @@ class DshUpdater
         if (File.Exists(path)) list.Add(new string[] { path, entryName });
     }
 
+    /** 系统工具的绝对路径（不依赖调用方 PATH）。 */
+    static string SystemTool(string name)
+    {
+        try { return Path.Combine(Environment.SystemDirectory, name); }
+        catch { return name; }
+    }
+
     static string JsonValue(string json, string key)
     {
         Match m = Regex.Match(json, "\"" + key + "\":\\s*\"([^\"]*)\"");
@@ -526,6 +544,16 @@ class DshUpdater
         public string ZipName = "";
         public List<string> Preserve = new List<string>();
         public List<string> ProcessNames = new List<string>();
+
+        /** 该顶层名字是否属于要保留的用户状态（与 preserve 逐项同名比较）。 */
+        public bool IsPreserved(string name)
+        {
+            foreach (string keep in Preserve)
+            {
+                if (string.Equals(keep, name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
 
         // 读取可执行文件旁的 update.json；不存在/损坏 → 返回 null（按便携版默认行为继续）
         public static PackageManifest Load(string baseDir)
