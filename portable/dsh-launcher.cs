@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Win32;
 
@@ -183,6 +184,49 @@ class DshLauncher
     // 仍能按旧代际读取未升级的会话）；要重跑：dsh.exe --migrate-sessions。
     // 紧急跳过：设 DSH_SKIP_SESSION_MIGRATION=1。
     //
+    // 目标代际：从随包的 @deepseek-ai/dsh-session 里解析 SESSION_FORMAT_VERSION（与迁移器同一
+    // 事实来源，上游改版本号这里自动跟上）。读不到就返回 -1 → 调用方照常交给迁移器（失败安全）。
+    static int ReadTargetGeneration(string baseDir)
+    {
+        try
+        {
+            string file = Path.Combine(baseDir, "app", "node_modules", "@deepseek-ai", "dsh-session", "lib", "index.js");
+            if (!File.Exists(file)) return -1;
+            Match m = Regex.Match(File.ReadAllText(file), @"SESSION_FORMAT_VERSION\s*=\s*(\d+)");
+            if (!m.Success) return -1;
+            int v;
+            return int.TryParse(m.Groups[1].Value, out v) ? v : -1;
+        }
+        catch { return -1; }
+    }
+
+    // 数一遍：sessions\<项目>\<会话>\ 下有多少个会话目录，其中多少个还没有"目标代际或更新"的
+    // generation 文件。只看文件名里的代际号（与迁移器判断"已是什么代际"的口径一致），不读内容 ——
+    // 几百次目录枚举，毫秒级。没有任何 generation 文件的目录也算"缺"，交给迁移器去报布局异常。
+    static int CountSessionDirs(string sessionsDir, int target, out int missing)
+    {
+        missing = 0;
+        int total = 0;
+        Regex generation = new Regex(@"^session(\.[0-9]+)?(\.v([0-9]+))?\.jsonl\.zstd$", RegexOptions.IgnoreCase);
+        foreach (string project in Directory.GetDirectories(sessionsDir))
+        {
+            foreach (string dir in Directory.GetDirectories(project))
+            {
+                total++;
+                bool hasTarget = false;
+                foreach (string file in Directory.GetFiles(dir))
+                {
+                    Match m = generation.Match(Path.GetFileName(file));
+                    if (!m.Success) continue;
+                    int version = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+                    if (version >= target) { hasTarget = true; break; }
+                }
+                if (!hasTarget) missing++;
+            }
+        }
+        return total;
+    }
+
     // 返回：0 成功；1 失败；2 跳过（无需迁移 / 已跑过 / 被禁用 / 缺迁移器）。
     static int RunSessionMigration(string baseDir, string nodeExe, string dataDir, bool force)
     {
@@ -214,13 +258,34 @@ class DshLauncher
             return 2;   // 本版本已处理过：静默跳过
         try { Directory.CreateDirectory(markerDir); } catch { }
 
+        // 但标记文件本身不可靠（实测被清掉过一次，于是每次启动都白跑一遍迁移检查、还刷 87 行日志），
+        // 所以先自己看一眼会话目录：每个会话目录里都已经有目标代际的文件 = 没有任何可迁的 → 毫秒级跳过。
+        // 目标代际从随包的 @deepseek-ai/dsh-session 里解析（不写死）；解析不出来就照常交给迁移器（失败安全）。
+        int targetVersion = ReadTargetGeneration(baseDir);
+        if (!force && targetVersion > 0)
+        {
+            int missing;
+            int total = CountSessionDirs(sessionsDir, targetVersion, out missing);
+            if (total > 0 && missing == 0)
+            {
+                Console.WriteLine("本地会话已是 v" + targetVersion + "（" + total + " 个），跳过迁移检查。");
+                try { File.WriteAllText(doneMarker, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + " " + version + " precheck"); } catch { }
+                return 2;
+            }
+        }
+
         // 迁移器的文字日志与 JSON 摘要默认写系统临时目录；改成程序目录内，保持绿色。
         // 只改子进程环境（不改本进程），免得 dsh 本体也把临时文件写进来。
         string tmpDir = Path.Combine(markerDir, "tmp");
         try { Directory.CreateDirectory(tmpDir); } catch { }
 
-        Console.WriteLine("首次以本版本启动：正在把本地会话格式升级到 v4（一次性，可回滚）...");
-        Console.WriteLine();
+        string targetLabel = targetVersion > 0 ? targetVersion.ToString() : "4";
+        if (!force)
+        {
+            // 强制重跑（--migrate-sessions）时上面已经印过一行了，这里不再误导成"首次以本版本启动"
+            Console.WriteLine("首次以本版本启动：正在把本地会话格式升级到 v" + targetLabel + "（一次性，可回滚）...");
+            Console.WriteLine();
+        }
 
         // 最多两轮：首轮并发迁移父子会话时可能有个别会话失败（父会话的 generation 在子会话
         // 准备期间被改写），重跑时父会话已是 v4、不会再有变化，串行补齐通常一次就干净。

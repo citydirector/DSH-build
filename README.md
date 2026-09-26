@@ -52,7 +52,32 @@
 
 - **原地更新**：双击 `update.exe`，自动检查并原地覆盖（保留 `data/`；覆盖前备份到 `data/backups/`；`update.exe` 自身一并更新）。更新前先关闭 dsh。
 - **会话格式自动迁移（v2/v3 → v4）**：每个 `VERSION` 首次启动跑一次，逐会话「写打开后立即关闭」发布 v4 generation；旧代际文件原样保留（要回滚就删掉新代际文件）。报告在 `data/.migrations/tmp/`；`dsh.exe --migrate-sessions` 可重跑，`DSH_SKIP_SESSION_MIGRATION=1` 可跳过。⚠️ 迁移后旧版构建读不出 v4 会话。
+  - 启动器**先自己扫一遍**会话目录（每个会话目录里是否已有目标代际的文件；目标版本从随包的 `@deepseek-ai/dsh-session` 解析 SESSION_FORMAT_VERSION，不写死）：全都已是目标代际就毫秒级跳过——标记文件被清掉也不会白跑一遍，控制台也不再刷「87 行 + 一段 JSON」。解析不出目标版本就照常交给迁移器（失败安全）。扫描只读目录名，不碰会话内容。
 - **更新后自查随包是否撑得住你的 bundle**：profile 的 `dsh.profile.bundles` 与「是否随包」是解耦的，选中但没随包的 bundle 只会在启动时行加载失败。用 `node portable/check-bundles.mjs <安装目录>\app\node_modules [--profile <profile>]`（退出码 `0` 干净 / `1` 有悬空 bundle / `2` 名单解析失败；`--self-test` 自证会报错）。CI 的 portable job 在 boot 冒烟后也会跑。
+
+### 更新是怎么判断"有没有新版"的
+
+`VERSION` 只记**上游提交号**，所以"上游没动、胶水改了"的更新（补丁脚本、启动器、更新器）只比 VERSION 永远送不到用户机器上。因此便携包根目录还有一份 `GLUE`：
+
+| 文件 | 含义 | 用途 |
+|---|---|---|
+| `VERSION` | 上游 commit sha | 迁移标记名、版本显示 |
+| `GLUE` | 本仓库内容（除 `portable/upstream.pin` 外）的 blob 指纹 | `update.exe` 判断"是否有新版" |
+
+判定规则：**上游提交号相同 且 胶水指纹相同**才算"已是最新版本"；任一侧缺这份信息（旧包 / 旧 Release body）就退回"只比上游提交号"，向后兼容。这样胶水类修复也能被正常更新拉到。
+
+### 启动慢的时候先看 MCP，不是会话
+
+便携包启动到 `dsh web:` 这一行，通常 2–3 秒（实测：带 228 MB / 87 个会话与 sessions 为空一个样——**启动根本不读会话**）。如果这里要等几十秒，几乎总是 **MCP 服务器扇出**：`@deepseek-ai/dsh-mcp-client` 的插件**激活前要连上服务器并拿到工具清单**（`apply()` 里 `await connection.ready`），连不上就按 `reconnect: { initialDelayMs: 500, maxDelayMs: 30000, maxAttempts: 10 }` 退避重试（单台最坏约 150 秒），`failOnStartupError` 默认 `false` = 不放弃、继续等。日志里是各 MCP 服务器自己的输出，所以看起来"没有与会话相关的输出"。
+
+判断与调整（**没有"惰性启动"开关**，schema 里只有 transport/command/args/env/cwd/url/headers/serverName/toolCallTimeoutMs/maxInstructionBytes/failOnStartupError/enabled/重连四项）：
+
+1. **后端不常开的一律默认关**：`- id: mcp-xxx` + `disabled: true`。零代价、启动立刻省下来；要用时在**插件面板**里打开（profile 的 `patchReload: live` → 行级启停即时生效，不用重启）。
+2. **后端总是就绪的别动**：连接是瞬时的，重试预算根本用不上；收窄它反而牺牲"后端重启后自动重连"——不值得。
+3. **确实想限单台的等待**才动 `reconnect`（如 `{ maxAttempts: 2, initialDelayMs: 300, maxDelayMs: 1500 }`）。代价要知道：预算是启动连接与运行期掉线**共用**的，用完后插件会放弃（"tools unregistered；reload the plugin or restart the Host"），要靠手动重载才回来。
+4. `failOnStartupError: true` **不省时间**（一样等完重试才抛），只会让这一行以失败告终——别用它来"加速"。
+5. `npx -y <pkg>` 起的服务器每次启动都要解析/可能联网取包，换成已安装的本地路径会更快。
+
 
 ### 目录结构
 
@@ -63,7 +88,8 @@ dsh-portable/
 ├── node/          # Node.js 运行时
 ├── app/           # dsh 本体与依赖（app/node_modules）
 ├── data/          # 用户数据（DSH_HOME，更新时保留）
-└── VERSION        # 当前构建对应的上游 commit sha
+├── VERSION        # 当前构建对应的上游 commit sha
+└── GLUE           # 本仓库内容指纹（update.exe 靠它发现"胶水更新"）
 ```
 
 ## npm tarball 版

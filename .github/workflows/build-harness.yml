@@ -366,10 +366,18 @@ jobs:
           if (-not (Test-Path portable\dsh.exe)) { throw "dsh.exe 编译失败" }
           if (-not (Test-Path portable\update.exe)) { throw "update.exe 编译失败" }
 
-      - name: Write VERSION
+      - name: Write VERSION and GLUE
         shell: pwsh
         run: |
           Set-Content -Path portable\VERSION -Value "${{ needs.check.outputs.sha }}" -NoNewline
+          # GLUE = 本仓库内容（除 pin 之外）的指纹。VERSION 只记上游提交号，于是"上游没动、胶水改了"
+          # 的更新（补丁脚本、启动器、更新器）在 update.exe 眼里不可见 —— 它比 VERSION 就永远说
+          # "已是最新版本"，这类修复根本送不到用户机器上。GLUE 让 update.exe 也认得出这种更新。
+          Set-Content -Path portable\GLUE -Value "${{ needs.check.outputs.glue }}" -NoNewline
+          if (-not (Test-Path portable\VERSION)) { throw "VERSION 未写入" }
+          if (-not (Test-Path portable\GLUE)) { throw "GLUE 未写入" }
+          "VERSION = $(Get-Content portable\VERSION)"
+          "GLUE    = $(Get-Content portable\GLUE)"
 
       # 冒烟测试：用便携 node boot 完整插件树（--help 太弱，只打印帮助不加载插件）
       - name: Smoke test

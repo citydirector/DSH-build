@@ -55,8 +55,12 @@ class DshUpdater
         }
         string versionFile = Path.Combine(baseDir, manifest == null ? "VERSION" : manifest.VersionFile);
         string current = File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "";
+        // 胶水指纹（本仓库内容摘要，构建期写进包根的 GLUE）。上游提交号相同、胶水不同 = 也有新东西：
+        // 补丁脚本/启动器/更新器这类改动不改变 VERSION，只比 sha 会把它们静默漏掉。
+        string glueFile = Path.Combine(baseDir, "GLUE");
+        string currentGlue = File.Exists(glueFile) ? File.ReadAllText(glueFile).Trim() : "";
 
-        Console.WriteLine("检查更新中... 当前版本: " + (current.Length >= 7 ? current.Substring(0, 7) : (current == "" ? "未知" : current)));
+        Console.WriteLine("检查更新中... 当前版本: " + (current.Length >= 7 ? current.Substring(0, 7) : (current == "" ? "未知" : current)) + (currentGlue == "" ? "" : "（glue " + currentGlue + "）"));
 
         string channel = ChooseChannel();
         string repo = manifest == null || manifest.Repo == "" ? Repo : manifest.Repo;
@@ -76,8 +80,12 @@ class DshUpdater
 
         string tag = JsonValue(json, "tag_name");
         string latestSha = ExtractSha(json);
+        string latestGlue = ExtractGlue(json);
 
-        bool upToDate = latestSha != "" && latestSha == current;
+        bool sameUpstream = latestSha != "" && latestSha == current;
+        // 任一侧没有胶水信息（旧包 / 旧 Release body）就退回"只比上游提交号"，向后兼容。
+        bool sameGlue = latestGlue == "" || currentGlue == "" || latestGlue == currentGlue;
+        bool upToDate = sameUpstream && sameGlue;
         if (upToDate)
         {
             bool force = HasForceArg() || AskForceUpdate(tag);
@@ -86,6 +94,10 @@ class DshUpdater
                 Console.WriteLine("已是最新版本（" + tag + "）。");
                 return 0;
             }
+        }
+        else if (sameUpstream && !sameGlue)
+        {
+            Console.WriteLine("上游提交相同，但胶水不同（本地 " + currentGlue + " → 发布 " + latestGlue + "），视为有更新。");
         }
 
         string assetPrefix = manifest == null || manifest.AssetPrefix == "" ? "dsh-portable-win64" : manifest.AssetPrefix;
@@ -441,6 +453,7 @@ class DshUpdater
             CollectFiles(files, Path.Combine(baseDir, "node"), "node");
             AddOne(files, Path.Combine(baseDir, "dsh.exe"), "dsh.exe");
             AddOne(files, Path.Combine(baseDir, "VERSION"), "VERSION");
+            AddOne(files, Path.Combine(baseDir, "GLUE"), "GLUE");
             AddOne(files, Path.Combine(baseDir, "update.exe"), "update.exe");
             if (files.Count == 0)
             {
@@ -542,6 +555,14 @@ class DshUpdater
         if (direct.Success) return direct.Groups[1].Value;
         Match upstream = Regex.Match(json, "upstream:\\s*([0-9a-f]{40})");
         return upstream.Success ? upstream.Groups[1].Value : "";
+    }
+
+    // 胶水指纹：Release body 的 `glue: <16位十六进制>` 行（构建流水线的跳过判定读同一行）。
+    // 负向先行断言排除"后面还跟着十六进制位"的情形，免得把 40 位的上游提交号也吃进来。
+    static string ExtractGlue(string json)
+    {
+        Match m = Regex.Match(json, "glue:\\s*([0-9a-f]{16})(?![0-9a-f])");
+        return m.Success ? m.Groups[1].Value : "";
     }
 
     static string FindAsset(string json, string prefix)
