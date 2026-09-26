@@ -65,6 +65,18 @@ on:
         options: [auto, dev, main]
         default: auto
 
+# 同一通道的构建排队执行：release 收尾是「先 gh release delete --cleanup-tag、再 create + 上传资产」，
+# 不是原子操作 —— 同通道两次 run 重叠会互相删掉对方的 release/tag，可能发出「资产不全」或
+# 「release notes 的 upstream sha 与资产不同源」的结果（update.exe 按 body 的 sha 判最新、按资产名下载，
+# 不同源时会反复重装），dev 通道还可能因两次 git push upstream.pin 而 non-fast-forward 失败。
+# 不同通道用不同 group，仍可并行（各自写自己的 tag）。
+#
+# 注意：concurrency 在 workflow 级求值，拿不到 check 作业解析出的 channel，所以这里复刻同一套规则：
+# 手动 main/dev 显式覆盖 > 否则跟随分支（push 只在 main、schedule 只在 dev）。
+concurrency:
+  group: build-${{ inputs.channel == 'main' && 'main' || inputs.channel == 'dev' && 'dev' || github.ref_name == 'main' && 'main' || 'dev' }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
