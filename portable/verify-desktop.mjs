@@ -5,7 +5,7 @@
 //   2. 无更新来源：resources 下不得有 app-update.yml；asar 内 package.json 不得含 dshMandatoryUpdatePolicy
 //   3. 迁移器：resources/dsh-build/migrate-sessions-v4.mjs 存在
 //   4. 补丁在产物里：运行时段 tarball 内 dsh-workflow-ptc/lib/index.js 可解析、白名单含 instruction-hint
-//   5. 绿色数据面：不打包 data/（DSH_HOME 由 app 首启创建），且不含任何个人数据
+//   5. 数据面：产物不含 data/ 与个人数据
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
@@ -123,8 +123,6 @@ function main() {
     problems.push(`FAIL lib/main.js — ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  // 绿色数据面：产物里不得带任何个人数据。DSH_HOME 由 app 首启创建（与上游一致），
-  // 人设/profile/preset 由用户自己的 data 提供 —— 既不进仓库，也不进发行包。
   check(!existsSync(join(stage, 'data')), 'ships no data/ (DSH_HOME is created on first run)')
   for (const leaked of ['desktop-seed', 'data/profiles/desktop/cordis.patch.yml', 'data/profiles/desktop/memory-kb.mjs', 'data/profiles/desktop/presets']) {
     check(!existsSync(join(stage, leaked)), `no personal data shipped: ${leaked}`)
