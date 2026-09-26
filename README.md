@@ -23,11 +23,26 @@
 
 | 产物 | 说明 |
 |---|---|
-| `dsh-portable-win64-*.zip` | Windows 绿色便携版（推荐），解压即用 |
-| `dsh-desktop-win64-*.zip` | Windows 桌面端（Electron 外壳 + 内置运行时），解压即用 |
+| `dsh-desktop-win64-*.zip` | **Windows 桌面端（绿色便携，推荐）**：Electron 外壳 + 内置运行时，解压即用 |
+| `dsh-portable-win64-*.zip` | Windows 绿色便携版：不带 Electron，用系统浏览器，更轻量 |
 | `dsh-npm-tarballs-*.zip` | npm 全家桶 tarball，离线 / 自托管分发 |
 
-## Windows 便携版（推荐）
+## Windows 桌面端（绿色便携，推荐）
+
+`dsh-desktop-win64-*.zip`：Electron 外壳 + 内置 dsh 运行时 —— 自带窗口、不占用系统浏览器，是用 DSH 的完整体验。
+
+1. 解压到**短路径**目录（如 `D:\dsh-desktop`）
+2. 双击 `DeepSeek Harness.exe`：自带窗口起 Web UI（默认端口 19387，与便携版的 3080 不冲突）
+3. 首次使用填 DeepSeek API key
+
+比便携版大约多一个 Electron（zip 约 368MB vs 178MB）；绿色承诺、桌面端 `update.exe`（清单驱动、可切通道）、构建期补丁与静态验收的细节见 [portable/README-desktop.md](portable/README-desktop.md)。
+
+- **不打包 `data/`**：`DSH_HOME`（安装目录内的 `data/`）由 app 首启创建，首启即**官方默认 profile**。人设 / preset / 插件属于用户数据 —— 既不进仓库，也不进发行包。
+- 包内 `update.exe` 读包内 `update.json`，**只认 `dsh-desktop-win64-*` 资产**，不会误拉便携版。
+- 覆盖 = **逐顶层条目镜像**（`robocopy /MIR`），清单里 `preserve: ["data"]` 声明的用户状态整棵不动；覆盖前自动备份。
+- 静态验收 `portable/verify-desktop.mjs`（CI 里跑）：入口与标记文件、无更新来源、迁移器、运行时补丁在产物里、不打包 `data/` 且不含个人数据。
+
+## Windows 便携版（绿色、轻量）
 
 1. 解压 `dsh-portable-win64-*.zip` 到任意目录（不建议放 C 盘程序目录）
 2. 双击 `dsh.exe`：自动起 Web UI（默认 `http://127.0.0.1:3080`）并打开浏览器
@@ -50,15 +65,6 @@ dsh-portable/
 ├── data/          # 用户数据（DSH_HOME，更新时保留）
 └── VERSION        # 当前构建对应的上游 commit sha
 ```
-
-## Windows 桌面端（绿色便携）
-
-`dsh-desktop-win64-*.zip`：Electron 外壳 + 内置 dsh 运行时。解压到**短路径**后双击 `DeepSeek Harness.exe`（默认端口 19387，与便携版 3080 不冲突）。绿色承诺、桌面端 `update.exe`（清单驱动）、构建期补丁与静态验收的细节见 [portable/README-desktop.md](portable/README-desktop.md)。
-
-- **不打包 `data/`**：`DSH_HOME`（安装目录内的 `data/`）由 app 首启创建，首启即**官方默认 profile**。人设 / preset / 插件属于用户数据 —— 既不进仓库，也不进发行包。
-- 包内 `update.exe` 读包内 `update.json`，**只认 `dsh-desktop-win64-*` 资产**，不会误拉便携版。
-- 覆盖 = **逐顶层条目镜像**（`robocopy /MIR`），清单里 `preserve: ["data"]` 声明的用户状态整棵不动；覆盖前自动备份。
-- 静态验收 `portable/verify-desktop.mjs`（CI 里跑）：入口与标记文件、无更新来源、迁移器、运行时补丁在产物里、不打包 `data/` 且不含个人数据。
 
 ## npm tarball 版
 
