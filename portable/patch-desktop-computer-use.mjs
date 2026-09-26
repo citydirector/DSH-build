@@ -72,7 +72,7 @@ function manifestOf(startDir, name) {
 const PLATFORM_TOKENS = { win32: ['win32', 'windows'], darwin: ['darwin', 'macos'], linux: ['linux'] }
 const ARCH_TOKENS = { x64: ['x64', 'amd64'], arm64: ['arm64', 'aarch64'] }
 
-function matchesPlatform(name) {
+export function matchesPlatformName(name) {
   const lower = name.toLowerCase()
   const groups = [PLATFORM_TOKENS, ARCH_TOKENS]
   const current = [process.platform, process.arch]
@@ -101,7 +101,7 @@ function platformNatives(startDir, name, seen) {
   const declared = { ...found.manifest.dependencies, ...found.manifest.optionalDependencies }
   const picked = {}
   for (const [dep, version] of Object.entries(declared)) {
-    if (matchesPlatform(dep)) picked[dep] = version
+    if (matchesPlatformName(dep)) picked[dep] = version
   }
   if (seen !== undefined) seen[name] = Object.keys(declared)
   return { dir: found.dir, version: found.manifest.version, natives: picked }
@@ -146,14 +146,25 @@ export function patchDesktopComputerUse(root) {
   }
   Object.assign(wanted, sdk.natives)
 
-  // ubjs 的平台原生（@ubjs/node-<suffix>）挂在 SDK 的解析基准下；没有平台原生依赖是正常的
+  // ubjs 的平台原生（@ubjs/node-<suffix>）挂在 SDK 的依赖树下。它必须找到 —— 上一版把它
+  // try/catch 静默吞了，结果打出一个没有 ubjs 原生、跑不起来的包。找不到就报错并打印现场。
+  const ubjsNatives = {}
+  const ubjsSeen = {}
   for (const name of ['@ubjs/core', '@ubjs/node']) {
-    try {
-      Object.assign(wanted, platformNatives(sdk.dir, name).natives)
-    } catch {
-      // 忽略：该包可能没有平台原生依赖
+    for (const base of [sdk.dir, providerDir, root]) {
+      try {
+        Object.assign(ubjsNatives, platformNatives(base, name, ubjsSeen).natives)
+        break
+      } catch {
+        // 换下一个基准目录再试
+      }
     }
   }
+  if (Object.keys(ubjsNatives).length === 0) {
+    const detail = Object.entries(ubjsSeen).map(([name, deps]) => `${name}: ${deps.join(', ') || '（未找到）'}`).join(' | ')
+    throw new Error(`patch-desktop-computer-use: 找不到 ubjs 的 ${PLATFORM_SUFFIX} 平台原生包（${detail}）`)
+  }
+  Object.assign(wanted, ubjsNatives)
 
   const added = []
   for (const [name, version] of Object.entries(wanted)) {

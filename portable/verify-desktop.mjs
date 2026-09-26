@@ -8,10 +8,12 @@
 //   5. 数据面：产物不含 data/
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+// 平台原生包名带工具链后缀（-msvc / -gnu），共用补丁脚本里的词表匹配，免得两处各写一套
+import { matchesPlatformName } from './patch-desktop-computer-use.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -118,9 +120,10 @@ function main() {
     problems.push(`FAIL lib/main.js — ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  // computer-use：注册表 + 原生提供方必须打进 asar，SDK 的原生二进制必须在 app.asar.unpacked。
-  // 打包之后补不进去（asar 结构 + 原生模块必须 unpack），所以只能靠打包前的依赖声明带上；
-  // 匹配用「路径后缀」而不是写死前缀 —— asar 内的布局随上游打包方式变，写死会假失败。
+  // computer-use：注册表 + 提供方 + SDK + 平台原生包必须打进 asar，原生 .node 必须在
+  // app.asar.unpacked（electron 不能从 asar 里加载原生模块）。打包之后补不进去，只能靠打包前的
+  // 依赖声明带上。包名一律用词表匹配（工具链后缀 -msvc / -gnu 会变，写死会假失败）；失败信息里
+  // 带上"实际打进了哪些包"和"asar 里有没有 .node"，这样它自己就能指出是没打包还是没 unpack。
   try {
     const buffer = readFileSync(asarPath)
     const { header } = readAsarHeader(buffer)
@@ -133,14 +136,22 @@ function main() {
       }
     }
     walkAsar(header, '')
-    const platformSuffix = `${process.platform}-${process.arch}`
+
     for (const suffix of [
       '@deepseek-ai/dsh-computer-use/package.json',
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
       '@trycua/cua-driver/package.json',
-      `@trycua/cua-driver-${platformSuffix}/package.json`,
-      `@ubjs/node-${platformSuffix}/package.json`,
     ]) check(asarPaths.some((path) => path.endsWith(suffix)), 'computer-use: ' + suffix + ' in asar')
+
+    /** 收集 asar 里某个前缀下的包名（不含版本、不含路径）。 */
+    const packagesUnder = (prefix) => [...new Set(asarPaths
+      .filter((path) => path.includes(prefix) && path.endsWith('/package.json'))
+      .map((path) => path.slice(path.indexOf(prefix), path.length - '/package.json'.length)))]
+    for (const [label, prefix] of [['SDK', '@trycua/cua-driver-'], ['ubjs', '@ubjs/']]) {
+      const found = packagesUnder(prefix).filter((name) => matchesPlatformName(name))
+      check(found.length > 0, `computer-use: ${label} 平台原生包 in asar`,
+        '打进去的：' + (packagesUnder(prefix).join(', ') || '（一个都没有）'))
+    }
 
     const nativeFiles = []
     const walkUnpacked = (dir, depth) => {
@@ -155,8 +166,11 @@ function main() {
     }
     if (existsSync(unpackedRoot)) walkUnpacked(unpackedRoot, 0)
     const cuaNative = nativeFiles.filter((path) => /cua|ubjs/u.test(path))
-    check(cuaNative.length > 0, 'computer-use: Cua Driver 原生二进制已 unpack',
-      nativeFiles.length === 0 ? 'app.asar.unpacked 里没有任何 .node' : 'unpacked 里的 .node：' + nativeFiles.slice(0, 4).join(', '))
+    const asarNodeFiles = asarPaths.filter((path) => path.endsWith('.node'))
+    check(cuaNative.length > 0, 'computer-use: Cua Driver 原生二进制已 unpack', cuaNative.length > 0 ? ''
+      : asarNodeFiles.length > 0
+        ? `asar 里有 ${asarNodeFiles.length} 个 .node 却没 unpack（需要 asarUnpack）：` + asarNodeFiles.slice(0, 3).join(', ')
+        : 'asar 与 app.asar.unpacked 里都没有 .node（原生包没被打进闭包）')
   } catch (error) {
     problems.push(`FAIL computer-use surface — ${error instanceof Error ? error.message : String(error)}`)
   }
