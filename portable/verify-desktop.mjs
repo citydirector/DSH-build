@@ -16,7 +16,7 @@ import { parseArgs } from 'node:util'
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 /** 读 asar 头，取回内部文件的偏移与长度。 */
-export function readAsarHeader(buffer) {
+function readAsarHeader(buffer) {
   const headerSize = buffer.readUInt32LE(12)
   const header = JSON.parse(buffer.subarray(16, 16 + headerSize).toString('utf8'))
   // 文件数据区从 16 + 4 字节对齐后的头长度开始（实测：16+align4(hs) 处正好是第一个 entry 的内容）。
@@ -24,7 +24,7 @@ export function readAsarHeader(buffer) {
 }
 
 /** 从 asar 里读一个文件（目录树按 slash 分段）。 */
-export function readAsarFile(buffer, path) {
+function readAsarFile(buffer, path) {
   const { header, dataOffset } = readAsarHeader(buffer)
   let node = header
   for (const part of path.split('/')) {

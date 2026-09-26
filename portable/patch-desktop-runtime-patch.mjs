@@ -16,12 +16,12 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** 环境变量：跳过打包流程内部的重建。 */
-export const SKIP_ENV = 'DSH_DESKTOP_SKIP_INTERNAL_BUILD'
+const SKIP_ENV = 'DSH_DESKTOP_SKIP_INTERNAL_BUILD'
 /** 客户端构建记录驱动的落点（上游 scripts/ 内，供 `node --import tsx/esm` 直接跑）。 */
-export const RECORD_DRIVER = 'scripts/dsh-build-refresh-client-record.ts'
+const RECORD_DRIVER = 'scripts/dsh-build-refresh-client-record.ts'
 
 /** 一处编辑：内部重建加开关。 */
-export const EDIT = {
+const EDIT = {
   name: 'packaging: allow skipping the internal rebuild so P1 survives into the runtime tarballs',
   file: 'apps/desktop/scripts/package-target.ts',
   from: "  await execute(['run', 'build:official'], buildEnv, REPOSITORY_ROOT)\n",
@@ -37,7 +37,7 @@ export const EDIT = {
  * @param {string} root - upstream 仓库根目录。
  * @returns {{ applied: boolean, driverWritten: boolean }}
  */
-export function patchDesktopRuntimePatch(root) {
+function patchDesktopRuntimePatch(root) {
   let applied = false
   const path = join(root, EDIT.file)
   const raw = readFileSync(path, 'utf8')

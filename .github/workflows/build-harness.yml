@@ -1,48 +1,10 @@
 name: Build DSH
 
-# ── 分支 = 通道 ─────────────────────────────────────────────────────────────
-#   dev（默认分支）—— 跟随上游最新的预发布通道
-#     · schedule（每天 06:00 UTC，GitHub 的 schedule **只在该仓库的默认分支上触发**）
-#     · 目标上游 = master 头；发布到 dsh-dev-latest（pre-release）
-#     · 发布成功后把这次的上游提交写进 portable/upstream.pin 并提交（见下）
-#   main —— 稳定通道
-#     · 只在 main 被推进时触发（push，路径过滤）或手动 dispatch
-#     · 目标上游 = portable/upstream.pin 里钉住的那个提交 —— 只有晋升时才动
-#     · 发布到 dsh-master-latest（正式）
-#   通道由**你所在的分支**决定，不再由事件类型猜测：
-#     在 dev 上（含每日 schedule）→ dsh-dev-latest；在 main 上 → dsh-master-latest；
-#     在临时分支上手动 dispatch → 按 dev 通道跑（用于验证，不会碰稳定标签）。
-#
-# ── 上游 pin：稳定通道可复现 ───────────────────────────────────────────────
-#   portable/upstream.pin 是一行 40 位上游 commit sha，含义是「本通道当前产物对应的上游提交」。
-#   · dev：每次成功发布后才推进到当天的上游 master 头 —— 所以 pin == 已发布的产物，
-#          不会出现「pin 指向 A、线上是 B」的错位；它同时是下次 schedule 的跳过判据。
-#   · main：只在晋升（把 dev 合过来）时更新 —— 于是 dsh-master-latest 永远是某个**确定的**
-#          上游提交的产物，随时可以重建；不再出现「当时的上游 HEAD 是什么就是什么」。
-#   跳过判定只对自动触发（schedule / push）生效，且要求**目标上游提交与胶水指纹都相同** ——
-#   只看上游会把"胶水改了但上游没动"的改动静默漏掉（实测踩过：晋升 PR 合进 main 却没动 pin，
-#   整轮直接跳过，新胶水一直没进稳定版）。手动 dispatch 一律构建。
-#
-# ── 晋升路径 ───────────────────────────────────────────────────────────────
-#   dev 验证 OK → gh pr create --base main --head dev → 合并 → main 上的 push 自动重建稳定版
-#   （diff 只有胶水 + 一行 pin，可 review）。
-#
-# ── 本地修复与产物 ─────────────────────────────────────────────────────────
-#   本地补丁：portable/patch-native-code.mjs 在构建产物上应用两处（幂等、可自愈，上游修了自动跳过）：
-#     1. hasIntrinsicConstructor 的 toString 空白归一化（浏览器 lossless-JSON 守卫）
-#     2. session 迁移白名单补历史 kind "instruction-hint"：改动点只有 v2→v3 的白名单
-#        （v3→v4 无此白名单），覆盖面是整条 v2→v3→v4 链 —— v2 会话必须先过 v2→v3，
-#        故它同时是「会话批量迁移到 v4」能 0 拒绝的前置条件。
-#   会话迁移：portable/build-migrator.mjs 把上游 scripts/migrate-sessions-to-v4.ts 打成
-#            portable/app/migrate-sessions-v4.mjs 随包分发；dsh.exe 启动时跑一次，
-#            把本地 v2/v3 会话补迁移到 v4（上游只在 resume 时才升级）。
-#   两个产物：
-#     1. npm tarball 集合（ubuntu，官方 release:pack 链）
-#     2. Windows 绿色便携包（windows，node 便携运行时 + hoisted 依赖 + dsh.exe + update.exe）
-#     3. Windows 桌面端绿色包（windows，Electron 外壳 + 内置 dsh 运行时，同一 release 挂 dsh-desktop-win64-*.zip）
-#   关键：下游所有 job 都用 check 解析出的**那个**上游 sha 检出上游，不用 master ——
-#         否则 check 与真正构建的提交可能不是同一个（上游在 run 期间前进了）。
-
+# 分支 = 通道：dev（默认分支）跟随上游 master 头 → dsh-dev-latest；main 的 push → dsh-master-latest，
+# 目标上游取 portable/upstream.pin（只在晋升时推进，所以稳定版可复现）。
+# GitHub 的 schedule 只在默认分支触发，因此每日构建天然只走 dev 通道。
+# 跳过判定：自动触发要求「目标上游提交 + 胶水指纹」都相同；手动 dispatch 一律构建。
+# 通道语义、晋升路径、产物与本地补丁详见 README.md。
 on:
   schedule:
     # 只会在默认分支（dev）上触发 —— 这也是 main 不会自动发稳定版的原因。
@@ -77,36 +39,11 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # pnpm 版本的单一事实来源。
-  #
-  # 为什么不是 12.x：pnpm 12.6.0（含 12.0–12.6 全线）在**工作区**里跑 `pnpm run <script>` 或
-  # `pnpm exec` 必然失败 —— 它内部那次「依赖校验安装」会带上已被自己移除的旧选项
-  # `verify-deps-before-run-install`，然后被自己的严格选项校验拒绝：
-  #   [ERROR] Unknown option: 'verify-deps-before-run-install' ... pnpm help install
-  # 已本地最小复现（`pnpm-workspace.yaml` 里只要有 `packages:` 就会触发），且 `--config.*`
-  # 之类的外部覆盖救不了它（那次调用在 pnpm 进程内部，拿不到我们的命令行开关）。所以留在
-  # 11.x 末版 11.27.1 —— 它包含我们要的修复，也认得这个旧选项。
-  #
-  # 为什么要升：上游 package.json 把 packageManager 钉在 pnpm@11.7.0，而 11.7.0 在
-  # node-linker=hoisted 下有缺陷：把已构建的包复制到其它 hoisted 位置时整目录替换，连带删掉
-  # 并发兄弟的 _tmp_* 暂存目录（pnpm#12880，11.25.0 修复）。症状是
-  # ERR_PNPM_ENOENT rename '.../_tmp_...' -> '.../esbuild'；更糟的是替换本身是静默的，
-  # 成功的那几次也会删掉目标下嵌套的 node_modules。11.27.1 > 11.25.0，已含修复。
-  #
-  # 配套的两个动作：
-  #   1. 两个构建 job 都在 checkout 之后把 package.json 的 packageManager 对齐到本版本。
-  #      - pnpm/action-setup@v6 会拿 version 输入与 packageManager 对账，不一致直接报
-  #        "Multiple versions of pnpm specified"（v4 不检查），对齐后这一关自然过；
-  #      - 对齐后 pnpm 不会再「自动下载并回退」到 11.7.0（默认 pmOnFail=download）——
-  #        包括 `pnpm run` 内部触发的依赖校验安装，那次调用继承不到我们的命令行开关，
-  #        钉不满足时会悄悄跑回 11.7.0，把 hoisted 缺陷带回来。
-  #      - packageManager 只影响 pnpm 自身行为，不进任何产物：锁文件里没有
-  #        packageManagerDependencies，该字段也不随包发布。
-  #   2. 每次 pnpm 调用仍带 --pm-on-fail=ignore：它让 pnpm 不把 packageManagerDependencies
-  #      写进 pnpm-lock.yaml，免得 --frozen-lockfile 因锁文件被改写而失败。
-  #
-  # 命令位置也讲究：`pnpm run <script> --flag` 的 --flag 会转交给脚本，要作用于 pnpm 必须写在
-  # 脚本名之前。这里统一放在 `pnpm` 之后、子命令之前，最不容易踩坑。
+  # pnpm 版本单一事实来源：11.27.1。12.x 全系在工作区里跑 `pnpm run/exec` 必失败（内部那次依赖
+  # 校验安装带上了已被自己移除的 verify-deps-before-run-install，外部 --config 覆盖救不了）；
+  # 11.7.0 又有 hoisted 缺陷 pnpm#12880（整目录替换会静默删掉并发兄弟的 _tmp_*）。
+  # 两个构建 job 因此都在 checkout 后把 packageManager 对齐到本版本（否则 pnpm 自动回退 11.7.0），
+  # 且每次 pnpm 调用带 --pm-on-fail=ignore（防它把 packageManagerDependencies 写进锁文件）。
   PNPM_VERSION: "11.27.1"
 
 jobs:

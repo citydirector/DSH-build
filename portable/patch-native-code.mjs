@@ -1,49 +1,28 @@
 // patch-native-code.mjs <target-node_modules>
 //
-// 修复上游 deepseek-harness 在构建产物上的两处缺陷（幂等、可自愈；上游修复后模式不
-// 存在则自动跳过，不破坏产物）。
+// 在构建产物上应用两处本地修复（幂等、可自愈：模式不存在即跳过）。
 //
-// 补丁 1：hasIntrinsicConstructor 的 native-code 字符串比较
-//   Function.prototype.toString 对 native 函数在真实浏览器 (Firefox/Chrome) 输出带换行
-//   （"function Object() {\n    [native code]\n}"），而 Node.js 输出单行，导致浏览器端
-//   walkJsonValue 把普通对象误判为"非 lossless JSON"，assistant stream chunk 校验全失败，
-//   消息无法渲染。修复：比较前 replace(/\s+/g, " ") 归一化空白。
+// 1. native-code 比较前要归一化空白：真实浏览器把 native 函数的 Function.prototype.toString
+//    输出成多行、Node 输出单行，浏览器端 walkJsonValue 会把普通对象误判成非 lossless JSON，
+//    assistant stream chunk 校验随之全失败（消息渲染不出来）。
+//    同一模式还内联在字符串字面量里（dsh-workflow-ptc 把 guest 源码整段塞进双引号字符串），
+//    注入裸引号会提前终止字符串 → 该 preset 挂载失败，所以按上下文给两种注入形式
+//    （PATCH_PLAIN / PATCH_ESCAPED，解码后等价）。
 //
-//   上下文转义（2026-09-24 修复）：
-//   同一模式也会出现在**字符串字面量内部**——@deepseek-ai/dsh-workflow-ptc/lib/index.js
-//   把整个 guest 源码作为双引号字符串常量（WORKFLOW_GUEST_SOURCE）内联在产物里，其中
-//   也有一份 hasIntrinsicConstructor。对字面量内部直接注入裸引号会提前终止字符串，
-//   令该模块 SyntaxError；而任何挂载 workflow-ptc 的 agent preset（standard / cordis /
-//   自定义预设）都会 mount 失败，Web UI「Agent 预设」卡片显示"加载失败"。
-//   因此按上下文决定注入形式：
-//     普通代码：   .replace(/\s+/g, " ")
-//     字面量内部： .replace(/\\s+/g, \" \")
-//   两者在被外层字符串解码后完全等价（反斜杠与引号都多转义一层）。
-//
-// 补丁 2：session 迁移的 SOURCE_KINDS 白名单缺少历史 kind "instruction-hint"
-//   改动点只有一处：@deepseek-ai/dsh-session-format-v2-to-v3 的 SOURCE_KINDS 白名单
-//   （v3→v4 以及更早的 v0→v1 / v1→v2 都没有这类白名单 + "unclassified message
-//   source" 拒绝）；但覆盖面是**整条 v2→v3→v4 链**：catalog 用 migrations 图 +
-//   currentVersion: 4 链式推进，v2 会话必须先过 v2→v3 才可能到 v4，所以这一处就是
-//   批量迁移器（portable/app/migrate-sessions-v4.mjs）能 0 拒绝的前置条件。
-//   旧版 DSH 注入的 AGENTS.md 提示消息 source.kind = "instruction-hint"，新版改名成
-//   "agent-instructions"；历史 kind 不在白名单里时迁移会抛
-//   "cannot safely transform unclassified message source"（会话直接读不出来）。
-//   修复：把 "instruction-hint" 插到白名单的 "user" 之后（无损放行，事件原样保留）。
-//   上游若把白名单挪走 / 改名，ALREADY_SOURCE_KINDS 与 unmatched 兜底会告警，
-//   而不是静默跳过。
-//
-// 用法: node patch-native-code.mjs <target-node_modules>
+// 2. session 迁移 v2→v3 的 SOURCE_KINDS 白名单缺历史 kind "instruction-hint"（旧版 DSH 注入的
+//    AGENTS.md 提示消息用它）。改动点只有这一处，但 v2 会话必须先过 v2→v3 才能到 v4，所以它是
+//    批量迁移器能 0 拒绝的前置条件；缺了会抛 "cannot safely transform unclassified message source"。
+//// 用法: node patch-native-code.mjs <target-node_modules>
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const BS = String.fromCharCode(92);
 /** 注入片段（普通代码上下文）。 */
-export const PATCH_PLAIN = '.replace(/' + BS + 's+/g, " ")';
+const PATCH_PLAIN = '.replace(/' + BS + 's+/g, " ")';
 /** 注入片段（字符串字面量内部，多转义一层）。 */
-export const PATCH_ESCAPED = '.replace(/' + BS + BS + 's+/g, ' + BS + '" ' + BS + '")';
+const PATCH_ESCAPED = '.replace(/' + BS + BS + 's+/g, ' + BS + '" ' + BS + '")';
 
-export const NATIVE_PATTERNS = [
+const NATIVE_PATTERNS = [
   {
     re: /Function\.prototype\.toString\.call\(([^)]*)\)(\s*===\s*)(`[^`]*\[native code\][^`]*`)/g,
     build: (arg, eq, tmpl) => `Function.prototype.toString.call(${arg})${PATCH_PLAIN}${eq}${tmpl}`,
@@ -67,7 +46,7 @@ export const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}
  * @param {number} offset 目标偏移
  * @returns {boolean} 是否位于字面量内部
  */
-export function insideStringLiteral(raw, offset) {
+function insideStringLiteral(raw, offset) {
   let quote = null;
   for (let i = 0; i < offset; i++) {
     const c = raw[i];
@@ -84,7 +63,7 @@ export function insideStringLiteral(raw, offset) {
 }
 
 /** 注入文本再转义一层：反斜杠加倍、双引号转义。 */
-export function escapeForLiteral(text) {
+function escapeForLiteral(text) {
   return text.split(BS).join(BS + BS).split('"').join(BS + '"');
 }
 
@@ -93,7 +72,7 @@ export function escapeForLiteral(text) {
  * @param {string} raw 源码
  * @returns {{out: string, patched: boolean, already: boolean, brokenRepaired: boolean, literal: boolean}}
  */
-export function patchNative(raw) {
+function patchNative(raw) {
   let out = raw;
   let patched = false;
   let literal = false;
@@ -131,7 +110,7 @@ export function patchNative(raw) {
 }
 
 /** 补丁 2：往 v2→v3 的白名单补 "instruction-hint"，打通 v2→v3→v4 整条链（详见文件头）。 */
-export function patchSourceKinds(raw) {
+function patchSourceKinds(raw) {
   if (ALREADY_SOURCE_KINDS.test(raw)) return raw;
   const re = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*\n(\s*)"user",)/;
   if (!re.test(raw)) return raw;
