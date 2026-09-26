@@ -318,7 +318,29 @@ jobs:
       - name: Patch runtime deps (deploy 漏的 registry 依赖)
         shell: pwsh
         run: |
-          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery
+          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery @trycua/cua-driver
+
+      # 断言补进来的东西真在位。patch-dep 找不到种子时只 warn 不报错（"缺失于 root，跳过"），
+      # 于是这类洞会静默复发 —— @babel/code-frame、@standard-schema/spec 都是这么漏过去的。
+      # 缺了 SDK，官方 computer-use 提供方会在激活时抛「原生模块导入失败」，而那时已经出包了。
+      # @trycua/cua-driver 是 patch-peers 拷进来的 workspace 包缺的 registry 依赖：补上它，
+      # computer use 就随包发行、版本与 app 同生共死（否则得在 profile 里单装一份，还得每次
+      # 更新后重装 —— 提供方的 peer 是精确版本，旧副本会被判为不兼容而跳过）。
+      - name: Assert the Cua Driver SDK shipped
+        shell: pwsh
+        run: |
+          $must = @(
+            'app\node_modules\@trycua\cua-driver\package.json',
+            'app\node_modules\@trycua\cua-driver-win32-x64-msvc',
+            'app\node_modules\@ubjs\core',
+            'app\node_modules\@ubjs\node'
+          )
+          $missing = @()
+          foreach ($m in $must) { if (-not (Test-Path "portable\$m")) { $missing += $m } }
+          if ($missing.Count -gt 0) { throw ("Cua Driver SDK 没补进来：" + ($missing -join ', ')) }
+          $sdk = Get-Item 'portable\app\node_modules\@trycua\cua-driver\package.json'
+          $native = Get-ChildItem 'portable\app\node_modules\@trycua\cua-driver-win32-x64-msvc' -Recurse -Filter '*.node' -ErrorAction SilentlyContinue | Select-Object -First 1
+          Write-Host ("cua-driver 已随包（package.json " + $sdk.Length + " 字节）；原生二进制：" + $(if ($native) { $native.Name + " / " + [math]::Round($native.Length / 1MB, 1) + " MB" } else { '(未找到 .node)' }))
 
       # 应用本地修复（幂等、可自愈；上游修复后自动跳过）：
       # 1. hasIntrinsicConstructor 的 toString 精确比较在真实浏览器输出带换行，
