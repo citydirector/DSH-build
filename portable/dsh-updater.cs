@@ -83,8 +83,10 @@ class DshUpdater
         string latestGlue = ExtractGlue(json);
 
         bool sameUpstream = latestSha != "" && latestSha == current;
-        // 任一侧没有胶水信息（旧包 / 旧 Release body）就退回"只比上游提交号"，向后兼容。
-        bool sameGlue = latestGlue == "" || currentGlue == "" || latestGlue == currentGlue;
+        // 胶水比较：**发布侧只要报了胶水，本地就必须对得上**（本地缺 GLUE = 这份包早于 GLUE 机制 →
+        // 判为有更新，好把 GLUE 带回来；否则老包永远等不到第一次"胶水更新"）。发布侧没有这行
+        // （旧 Release）才退回"只比上游提交号"。
+        bool sameGlue = latestGlue == "" || latestGlue == currentGlue;
         bool upToDate = sameUpstream && sameGlue;
         if (upToDate)
         {
