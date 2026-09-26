@@ -169,17 +169,24 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
     })
     const provider = 'packages/experimental/computer-use-cua-driver-native'
     write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })
-    // 平台原生包是 SDK 的 optionalDependencies —— 第一版补丁就是漏在这里，asar 里连一个 .node 都没有
+    // 平台原生包是 SDK 的 optionalDependencies —— 第一版补丁就是漏在这里，asar 里连一个 .node 都没有。
+    // exports 只暴露 "."（不暴露 ./package.json）—— 第二版补丁就是被这个挡住的，清单必须靠入口向上找。
     write(`${provider}/node_modules/@trycua/cua-driver/package.json`, {
       name: '@trycua/cua-driver',
       version: '0.28.0',
+      main: 'index.js',
+      exports: { '.': './index.js' },
       optionalDependencies: { [sdkNative]: '0.28.0', '@trycua/cua-driver-darwin-arm64': '0.28.0' },
     })
+    writeFileSync(join(root, provider, 'node_modules/@trycua/cua-driver/index.js'), 'module.exports = {}\n')
     write(`${provider}/node_modules/@trycua/cua-driver/node_modules/@ubjs/node/package.json`, {
       name: '@ubjs/node',
       version: '0.31.0-3',
+      main: 'index.js',
+      exports: { '.': './index.js' },
       optionalDependencies: { [ubjsNative]: '0.31.0-3', '@ubjs/node-linux-x64-gnu': '0.31.0-3' },
     })
+    writeFileSync(join(root, provider, 'node_modules/@trycua/cua-driver/node_modules/@ubjs/node/index.js'), 'module.exports = {}\n')
     return root
   }
 
