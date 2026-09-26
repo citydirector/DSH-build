@@ -25,9 +25,9 @@
 // "Assert the Cua Driver SDK shipped"）。
 //
 // 用法: node patch-desktop-computer-use.mjs <repo-root>
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 const APP_PACKAGE = 'apps/desktop/package.json'
 /** 上游 workspace 里原生提供方所在目录（pnpm 把它的依赖链接在它自己的 node_modules 下）。 */
@@ -41,16 +41,19 @@ export const RUNTIME_PACKAGES = [
   '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native',
 ]
 
-/** 逐级向上找 `<dir>/node_modules/<name>` —— 就是 node 的解析算法，但不走 exports，
- * 于是既能处理"exports 不暴露 ./package.json"，也能处理 ESM-only 包（只有 import 条件时
- * require.resolve 会失败）。pnpm 的 isolated 布局里那些链接也照常命中。 */
+/** 逐级向上找 `<dir>/node_modules/<name>` —— 照搬 node 的算法：走 node_modules 链、不碰 exports
+ * （于是能处理"exports 不暴露 ./package.json"和 ESM-only 包），并且当某一级目录本身就叫
+ * node_modules 时直接在其下找 —— pnpm isolated 布局里"包与它的依赖并排"正是这个形状，少这一步
+ * 就会一路找成 node_modules/node_modules。命中后做 realpath：pnpm 的链接要还原到 store 里的真实
+ * 位置，否则从链接出发永远找不到它的兄弟依赖（ubjs 就是这么漏的）。 */
 function findPackage(startDir, name) {
   let dir = startDir
-  for (let depth = 0; depth < 12; depth += 1) {
-    const packageDir = join(dir, 'node_modules', name)
-    const candidate = join(packageDir, 'package.json')
-    if (existsSync(candidate)) {
-      return { dir: packageDir, manifest: JSON.parse(readFileSync(candidate, 'utf8')) }
+  for (let depth = 0; depth < 16; depth += 1) {
+    const base = basename(dir) === 'node_modules' ? dir : join(dir, 'node_modules')
+    const packageDir = join(base, name)
+    if (existsSync(join(packageDir, 'package.json'))) {
+      const real = realpathSync(packageDir)
+      return { dir: real, manifest: JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) }
     }
     const parent = dirname(dir)
     if (parent === dir) break

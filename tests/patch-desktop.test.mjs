@@ -1,7 +1,7 @@
 // 两个桌面补丁脚本的回归测试：fixture 树 + 幂等 + 锚点缺失必须报错。
 // 运行: node --test tests/patch-desktop.test.mjs  （或 node tests/patch-desktop.test.mjs）
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -223,6 +223,53 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
     rmSync(join(missing, 'packages/experimental/computer-use-cua-driver-native/node_modules'), { recursive: true, force: true })
     assert.throws(() => patchDesktopComputerUse(missing), /@trycua\/cua-driver/)
   } finally { rmSync(missing, { recursive: true, force: true }) }
+})
+
+test('computer-use 补丁：pnpm isolated 布局（包与依赖并排 + 链接）也能找齐', () => {
+  const HOST = {
+    win32: { x64: 'win32-x64-msvc', arm64: 'win32-arm64-msvc' },
+    linux: { x64: 'linux-x64-gnu', arm64: 'linux-arm64-gnu' },
+    darwin: { x64: 'darwin-x64', arm64: 'darwin-arm64' },
+  }[process.platform]?.[process.arch] ?? `${process.platform}-${process.arch}`
+  const sdkNative = `@trycua/cua-driver-${HOST}`
+  const ubjsNative = `@ubjs/node-${HOST}`
+
+  const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-cua-store-'))
+  const write = (rel, value) => {
+    const path = join(root, rel)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
+  }
+  try {
+    write('apps/desktop/package.json', {
+      name: '@deepseek-ai/dsh-desktop',
+      dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' },
+    })
+    const provider = 'packages/experimental/computer-use-cua-driver-native'
+    write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })
+    // pnpm 的真实形状：SDK 与它的依赖（ubjs）**并排**躺在同一个 store 目录的 node_modules 下，
+    // 而 provider 通过链接引用 SDK。不 realpath、不在 node_modules 这一级特殊处理，ubjs 就找不到。
+    const store = 'node_modules/.pnpm/@trycua+cua-driver@0.28.0/node_modules'
+    write(`${store}/@trycua/cua-driver/package.json`, {
+      name: '@trycua/cua-driver',
+      version: '0.28.0',
+      exports: { '.': { import: './index.js' } },
+      optionalDependencies: { [sdkNative]: '0.28.0' },
+    })
+    writeFileSync(join(root, store, '@trycua/cua-driver/index.js'), 'export default {}\n')
+    write(`${store}/@ubjs/node/package.json`, {
+      name: '@ubjs/node',
+      version: '0.31.0-3',
+      optionalDependencies: { [ubjsNative]: '0.31.0-3' },
+    })
+    mkdirSync(join(root, provider, 'node_modules/@trycua'), { recursive: true })
+    symlinkSync(join(root, store, '@trycua/cua-driver'), join(root, provider, 'node_modules/@trycua/cua-driver'),
+      process.platform === 'win32' ? 'junction' : 'dir')
+
+    const { added } = patchDesktopComputerUse(root)
+    assert.ok(added.includes(sdkNative), 'SDK 平台原生包应被声明：' + added.join(', '))
+    assert.ok(added.includes(ubjsNative), 'ubjs 平台原生包应被声明：' + added.join(', '))
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 let failed = 0
