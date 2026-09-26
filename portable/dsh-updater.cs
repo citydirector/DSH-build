@@ -180,13 +180,42 @@ class DshUpdater
                 sb.AppendLine("copy /y \"" + file + "\" \"" + Path.Combine(baseDir, name) + "\"");
             }
         }
+        // 应用成功后清理暂存；脚本中途 exit /b 1 时这几个删除不会执行，new/ 留着便于手动重试。
+        sb.AppendLine("del /q \"" + zipPath + "\" >nul 2>&1");
+        sb.AppendLine("rmdir /s /q \"" + newDir + "\" >nul 2>&1");
         File.WriteAllText(applyCmd, sb.ToString());
 
         ProcessStartInfo psi = new ProcessStartInfo();
-        psi.FileName = "cmd.exe";
+        psi.FileName = SystemTool("cmd.exe");
         psi.Arguments = "/c \"\"" + applyCmd + "\"\"";
         psi.UseShellExecute = true;
-        Process.Start(psi);
+
+        Process apply = null;
+        try
+        {
+            apply = Process.Start(psi);
+        }
+        catch (Exception error)
+        {
+            // shell 起不来时（例如被安全软件拦）改用无窗口直接创建，避免整轮更新无声失败。
+            Console.Error.WriteLine("启动更新脚本失败（" + error.Message + "），改用无窗口方式重试...");
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            try { apply = Process.Start(psi); }
+            catch (Exception second) { Console.Error.WriteLine("再次启动失败：" + second.Message); }
+        }
+
+        try
+        {
+            if (apply != null && apply.WaitForExit(2000) && apply.ExitCode != 0)
+            {
+                Console.Error.WriteLine("更新脚本未能运行（退出码 0x" + unchecked((uint)apply.ExitCode).ToString("X8") + "）。");
+                Console.Error.WriteLine("请手动执行：");
+                Console.Error.WriteLine("  \"" + SystemTool("cmd.exe") + "\" /c \"\"" + applyCmd + "\"\"");
+                return 1;
+            }
+        }
+        catch (Exception) { /* 句柄不可用时无法判定，维持旧行为 */ }
 
         Console.WriteLine("更新已开始，后台正在应用，本窗口即将关闭。");
         return 42;
