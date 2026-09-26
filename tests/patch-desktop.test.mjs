@@ -149,26 +149,64 @@ test('工具链补丁：两处编辑都能命中且幂等', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('computer-use 补丁：声明两个运行时依赖、幂等、结构变化必须报错', () => {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-cua-'))
-  const manifestPath = join(root, 'apps/desktop/package.json')
-  try {
-    mkdirSync(join(root, 'apps/desktop'), { recursive: true })
-    writeFileSync(manifestPath, JSON.stringify({
+test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂等、缺件必须报错', () => {
+  const suffix = `${process.platform}-${process.arch}`
+  const sdkNative = `@trycua/cua-driver-${suffix}`
+  const ubjsNative = `@ubjs/node-${suffix}`
+
+  /** 造一棵含「提供方 → SDK → ubjs」解析链的假树。 */
+  const makeTree = () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-cua-'))
+    const write = (rel, value) => {
+      const path = join(root, rel)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
+    }
+    write('apps/desktop/package.json', {
       name: '@deepseek-ai/dsh-desktop',
       version: '0.0.0',
       dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' },
-    }, null, 2) + '\n')
+    })
+    const provider = 'packages/experimental/computer-use-cua-driver-native'
+    write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })
+    // 平台原生包是 SDK 的 optionalDependencies —— 第一版补丁就是漏在这里，asar 里连一个 .node 都没有
+    write(`${provider}/node_modules/@trycua/cua-driver/package.json`, {
+      name: '@trycua/cua-driver',
+      version: '0.28.0',
+      optionalDependencies: { [sdkNative]: '0.28.0', '@trycua/cua-driver-darwin-arm64': '0.28.0' },
+    })
+    write(`${provider}/node_modules/@trycua/cua-driver/node_modules/@ubjs/node/package.json`, {
+      name: '@ubjs/node',
+      version: '0.31.0-3',
+      optionalDependencies: { [ubjsNative]: '0.31.0-3', '@ubjs/node-linux-x64-gnu': '0.31.0-3' },
+    })
+    return root
+  }
+
+  const root = makeTree()
+  const manifestPath = join(root, 'apps/desktop/package.json')
+  try {
     const first = patchDesktopComputerUse(root)
-    assert.deepEqual(first.added, RUNTIME_PACKAGES)
+    assert.deepEqual([...first.added].sort(), [...RUNTIME_PACKAGES, sdkNative, ubjsNative].sort())
     const written = JSON.parse(readFileSync(manifestPath, 'utf8'))
     for (const name of RUNTIME_PACKAGES) assert.equal(written.dependencies[name], 'workspace:*')
+    assert.equal(written.dependencies[sdkNative], '0.28.0', '平台原生包按已安装清单的精确版本声明')
+    assert.equal(written.dependencies[ubjsNative], '0.31.0-3')
     assert.equal(written.dependencies['@deepseek-ai/dsh-base'], 'workspace:*', '不能动原有依赖')
+    assert.ok(!('@trycua/cua-driver-darwin-arm64' in written.dependencies), '不声明别的平台')
     assert.deepEqual(patchDesktopComputerUse(root).added, [], '第二次必须无改动（幂等）')
-    // 上游改了结构（没有 dependencies 对象）时必须报错，而不是静默加不上、最后打出一个没有 SDK 的包
+    // 上游改了结构时必须报错，而不是静默加不上、最后打出一个没有原生二进制的包
     writeFileSync(manifestPath, JSON.stringify({ name: '@deepseek-ai/dsh-desktop' }, null, 2) + '\n')
     assert.throws(() => patchDesktopComputerUse(root), /dependencies/)
   } finally { rmSync(root, { recursive: true, force: true }) }
+
+  // 构建树里没装 SDK 也必须报错。用**新树**：require 会缓存上一次成功加载的 JSON，
+  // 在同一个树里删掉文件再测会被缓存骗过去（构建里只跑一次，故不影响生产）。
+  const missing = makeTree()
+  try {
+    rmSync(join(missing, 'packages/experimental/computer-use-cua-driver-native/node_modules'), { recursive: true, force: true })
+    assert.throws(() => patchDesktopComputerUse(missing), /@trycua\/cua-driver/)
+  } finally { rmSync(missing, { recursive: true, force: true }) }
 })
 
 let failed = 0

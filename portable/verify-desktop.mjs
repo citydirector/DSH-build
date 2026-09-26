@@ -133,10 +133,13 @@ function main() {
       }
     }
     walkAsar(header, '')
+    const platformSuffix = `${process.platform}-${process.arch}`
     for (const suffix of [
       '@deepseek-ai/dsh-computer-use/package.json',
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
       '@trycua/cua-driver/package.json',
+      `@trycua/cua-driver-${platformSuffix}/package.json`,
+      `@ubjs/node-${platformSuffix}/package.json`,
     ]) check(asarPaths.some((path) => path.endsWith(suffix)), 'computer-use: ' + suffix + ' in asar')
 
     const nativeFiles = []
