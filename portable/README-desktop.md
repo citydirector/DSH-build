@@ -4,7 +4,7 @@
 
 1. 下载 `dsh-desktop-win64-*.zip`，解压到**短路径**目录（如 `D:\dsh-desktop`）。包内 Python 运行时的 `site-packages` 路径较长，放在很深的目录里可能撞上 Windows 的 MAX_PATH 限制
 2. 双击 `DeepSeek Harness.exe`
-3. 想直接接管现有数据：把便携版 `data/` 的内容复制进包内 `data/`（桌面端用自己的 profile：`data/profiles/desktop`，本包已预置常用配置与自定义预设）
+3. 想直接接管现有数据：把便携版 `data/` 的内容复制进包内 `data/`（桌面端用自己的 profile：`data/profiles/desktop`，首启由 app 生成官方默认 profile；本包不预置任何个人配置与 preset）
 
 **绿色承诺**：可执行文件旁有 `portable.flag` 时，`DSH_HOME` = 包内 `data/`，Electron 的 `userData`/`sessionData`/`cache`/`logs`/`crashDumps` 也全部重定向到 `data/electron/` —— 不写注册表、不写 C 盘用户目录；删除整个目录即彻底卸载。
 
@@ -23,7 +23,7 @@ dsh-desktop/
 ├── portable.flag           # 便携开关
 └── data/                   # 用户数据（更新时整棵不动）
     ├── electron/           # Chromium userData 重定向目标
-    ├── profiles/desktop/   # 桌面端 profile（含预置配置与预设）
+    ├── profiles/desktop/   # 桌面端 profile（首启由 app 生成官方默认）
     └── .migrations/        # 会话迁移标记（每个 VERSION 一份）
 ```
 
