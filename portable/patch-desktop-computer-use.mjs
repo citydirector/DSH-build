@@ -19,6 +19,14 @@
 // 的那几个），上游升级 SDK 时这里自动跟上。读不到就抛错并打印现场（provider/node_modules 在不在、
 // root/@trycua 在不在），宁可构建失败，也不要静默出一个没有原生二进制的包。
 //
+// 为什么声明在 apps/desktop-host，而不是 apps/desktop（第一版错在这里）：
+// 桌面包的 asar 里是**两棵树** —— `node_modules/` 是 Electron 主程序自己的依赖，
+// `dsh/node_modules/` 是 harness 运行时那棵（产出见 apps/desktop/scripts/electron-builder-config.mjs
+// 里的 from: buildPaths.dsh, to: 'dsh'；它来自 @deepseek-ai/dsh-desktop-host 的依赖树）。
+// profile 里的插件行是在**运行时那棵树**里解析的：声明在 apps/desktop 上只会落在主程序那棵，
+// 行去 dsh/node_modules 里找 @deepseek-ai/… 找不到 → **静默不加载**（表面现象是"提供方没激活、
+// 工具不注册"，既不报错也不崩）。声明在 desktop-host 上才会进运行时那棵树。
+//
 // 为什么必须在打包前做：桌面包里的应用是 asar（打包后再塞东西要动 asar 结构，原生 .node 还得
 // 同时落到 app.asar.unpacked），所以只能走依赖闭包。便携版不用这个脚本：app/ 是散目录，构建期
 // 用 patch-peers + patch-dep 直接补齐（见 workflow 的 "Patch runtime deps" 与
@@ -29,7 +37,8 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 
 import { basename, dirname, join } from 'node:path'
 
-const APP_PACKAGE = 'apps/desktop/package.json'
+/** 运行时那棵树的来源包 —— profile 插件行就是从它的依赖树里解析的。 */
+const APP_PACKAGE = 'apps/desktop-host/package.json'
 /** 上游 workspace 里原生提供方所在目录（pnpm 把它的依赖链接在它自己的 node_modules 下）。 */
 const PROVIDER_DIR = 'packages/experimental/computer-use-cua-driver-native'
 /** 构建平台后缀，与原生包名尾部一致（win32-x64 / darwin-arm64 / linux-x64 …）。 */

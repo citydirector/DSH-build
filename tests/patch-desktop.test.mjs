@@ -170,10 +170,10 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
     }
-    write('apps/desktop/package.json', {
+    write('apps/desktop-host/package.json', {
       name: '@deepseek-ai/dsh-desktop',
       version: '0.0.0',
-      dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' },
+      dependencies: { '@deepseek-ai/dsh-app-boot': 'workspace:*' },
     })
     const provider = 'packages/experimental/computer-use-cua-driver-native'
     write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })
@@ -199,7 +199,7 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
   }
 
   const root = makeTree()
-  const manifestPath = join(root, 'apps/desktop/package.json')
+  const manifestPath = join(root, 'apps/desktop-host/package.json')
   try {
     const first = patchDesktopComputerUse(root)
     assert.deepEqual([...first.added].sort(), [...RUNTIME_PACKAGES, sdkNative, ubjsNative].sort())
@@ -207,7 +207,7 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
     for (const name of RUNTIME_PACKAGES) assert.equal(written.dependencies[name], 'workspace:*')
     assert.equal(written.dependencies[sdkNative], '0.28.0', '平台原生包按已安装清单的精确版本声明')
     assert.equal(written.dependencies[ubjsNative], '0.31.0-3')
-    assert.equal(written.dependencies['@deepseek-ai/dsh-base'], 'workspace:*', '不能动原有依赖')
+    assert.equal(written.dependencies['@deepseek-ai/dsh-app-boot'], 'workspace:*', '不能动原有依赖')
     assert.ok(!(`@trycua/cua-driver-${foreign}` in written.dependencies), '不声明别的平台')
     assert.ok(!(`@ubjs/node-${foreign}` in written.dependencies), 'ubjs 也不声明别的平台')
     assert.deepEqual(patchDesktopComputerUse(root).added, [], '第二次必须无改动（幂等）')
@@ -241,9 +241,9 @@ test('computer-use 补丁：pnpm isolated 布局（包与依赖并排 + 链接�
     writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
   }
   try {
-    write('apps/desktop/package.json', {
+    write('apps/desktop-host/package.json', {
       name: '@deepseek-ai/dsh-desktop',
-      dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' },
+      dependencies: { '@deepseek-ai/dsh-app-boot': 'workspace:*' },
     })
     const provider = 'packages/experimental/computer-use-cua-driver-native'
     write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })

@@ -137,20 +137,30 @@ function main() {
     }
     walkAsar(header, '')
 
+    // 关键：必须在**运行时那棵树**（dsh/node_modules）里，而不是 asar 根的 node_modules。
+    // asar 里是两棵树 —— 根那棵给 Electron 主程序，dsh/ 那棵给 harness；profile 的插件行是在
+    // dsh/ 里解析的。第一版就是把依赖声明在 apps/desktop 上（落到根那棵），行找不到包 → 静默
+    // 不加载（提供方不激活、工具不注册，不报错也不崩）。这里按位置断言，把那个坑钉住。
+    const runtimePaths = asarPaths.filter((path) => path.startsWith('dsh/node_modules/'))
     for (const suffix of [
       '@deepseek-ai/dsh-computer-use/package.json',
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
       '@trycua/cua-driver/package.json',
-    ]) check(asarPaths.some((path) => path.endsWith(suffix)), 'computer-use: ' + suffix + ' in asar')
+    ]) {
+      const inRuntime = runtimePaths.some((path) => path.endsWith(suffix))
+      const elsewhere = asarPaths.filter((path) => path.endsWith(suffix) && !path.startsWith('dsh/node_modules/'))
+      check(inRuntime, 'computer-use: ' + suffix + ' in 运行时树 dsh/node_modules',
+        elsewhere.length > 0 ? '只出现在别处（' + elsewhere[0] + '）→ 插件行解析不到' : '两棵树里都没有')
+    }
 
-    /** 收集 asar 里某个前缀下的包名（不含版本、不含路径）。 */
-    const packagesUnder = (prefix) => [...new Set(asarPaths
+    /** 收集运行时树里某个前缀下的包名（不含路径）。 */
+    const packagesUnder = (prefix) => [...new Set(runtimePaths
       .filter((path) => path.includes(prefix) && path.endsWith('/package.json'))
       .map((path) => path.slice(path.indexOf(prefix), path.length - '/package.json'.length)))]
     for (const [label, prefix] of [['SDK', '@trycua/cua-driver-'], ['ubjs', '@ubjs/']]) {
       const found = packagesUnder(prefix).filter((name) => matchesPlatformName(name))
-      check(found.length > 0, `computer-use: ${label} 平台原生包 in asar`,
-        '打进去的：' + (packagesUnder(prefix).join(', ') || '（一个都没有）'))
+      check(found.length > 0, `computer-use: ${label} 平台原生包 in 运行时树`,
+        '运行时树里打进去的：' + (packagesUnder(prefix).join(', ') || '（一个都没有）'))
     }
 
     const nativeFiles = []
