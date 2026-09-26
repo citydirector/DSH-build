@@ -95,3 +95,33 @@ dsh-desktop/
 7. 压缩为 `dsh-desktop-win64-<sha>.zip`，并跑 `portable/verify-desktop.mjs` 做静态验收（24 项：无 feed、manifest 无策略、便携引导已编入、三项运行时补丁都在产物里、数据布局与习惯种子齐全）
 
 本机调试（可选环境变量）：`DSH_DESKTOP_SOURCE` 指上游检出、`DSH_DESKTOP_TAG` 指 sha、`DSH_DESKTOP_OUT` 产出目录、`DSH_DESKTOP_EXTRA_PATH`/`DSH_DESKTOP_TEMP_DIR` 补本机 PATH 与临时目录。
+
+## profile 接线与端口（2026-09-26 实测）
+
+### 第三方 bundle 要“双份接线”
+
+profile 的插件树 = `package.json` 的 `dsh.profile.bundles` + `cordis.patch.yml`：
+
+- 只装依赖（`pnpm install`）**不会**让 bundle 加载：必须把包名加进 `dsh.profile.bundles`；要改配置时再在 `cordis.patch.yml` 写同 id 的行。
+- `cordis.yml` 是**空列表桩**（“Edit cordis.patch.yml, not this file”），不要用它判断当前配置。
+- 新增行 / 新增 bundle **不热重载**，需要重启 app；就地改已有行的 `config` 会随下次加载生效。
+
+### patch 行会整块替换 `config`（会直接导致启动失败）
+
+实测：给 `webserver` 行只写 `port` → 丢掉必需且带 `!!js` 表达式的 `host` →
+`ValidationError: $.host missing required value` → `webserver` 是必需插件 → **整个 dsh 启动中止**
+（`dsh 已退出，退出码 1`），连带 10 个等 `webServer` / `connection` 的插件一起挂。
+启动诊断写在 `$DSH_HOME/logs/startup-<ISO>-<uuid>.log`。
+
+### 本机端口分配
+
+| 用途 | 便携版 | 桌面端 |
+|---|---|---|
+| Web UI | 3080（`dsh.exe` 默认；要改就在 profile 的 `webserver` 行钉 `port`）| 19387（`apps/desktop-host/src/index.ts` 硬编码）|
+| DeepInfra 代理 | 8790 | 8791 |
+| remote-access 代理 | 13337（插件默认）| 行级 `disabled: true` 关闭 |
+
+### 两个 app 共用一份 data（可选）
+
+`<桌面端目录>\data` 做成指向便携版 `data` 的**目录符号链接**（`mklink /D`）即可共用会话/记忆/知识库/凭据；
+两边端口已错开，可同时开，但**不要用同一个会话两边同时下指令**。桌面端的 `update.exe` 覆盖时排除 `data`，链接不会被更新破坏。
