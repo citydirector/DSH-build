@@ -66,14 +66,45 @@ function manifestOf(startDir, name) {
   return found
 }
 
-/** 从某个包的清单里挑出与构建平台匹配的原生 optionalDependencies。 */
-function platformNatives(startDir, name) {
-  const { dir, manifest } = manifestOf(startDir, name)
-  const picked = {}
-  for (const [dep, version] of Object.entries(manifest.optionalDependencies ?? {})) {
-    if (dep.endsWith(PLATFORM_SUFFIX)) picked[dep] = version
+/** 平台词表：名字里同时命中本平台与本架构、且不含任何别的平台/架构词，才算平台原生包。
+ * 真实命名带工具链后缀（win32-x64-msvc / linux-x64-gnu / darwin-arm64），所以不能用
+ * endsWith('<platform>-<arch>') 去匹配 —— 那是实跑踩到的坑之一。 */
+const PLATFORM_TOKENS = { win32: ['win32', 'windows'], darwin: ['darwin', 'macos'], linux: ['linux'] }
+const ARCH_TOKENS = { x64: ['x64', 'amd64'], arm64: ['arm64', 'aarch64'] }
+
+function matchesPlatform(name) {
+  const lower = name.toLowerCase()
+  const groups = [PLATFORM_TOKENS, ARCH_TOKENS]
+  const current = [process.platform, process.arch]
+  for (let index = 0; index < groups.length; index += 1) {
+    const table = groups[index]
+    const key = current[index]
+    // 本平台/本架构：任一别名命中即可（win32 / windows 是"或"，不是"且"）
+    const tokens = table[key] ?? [key]
+    if (!tokens.some((token) => lower.includes(token))) return false
+    // 别的平台/架构：一个都不许沾（否则 win32-arm64 / linux-x64 都会被误收）
+    for (const [otherKey, otherTokens] of Object.entries(table)) {
+      if (otherKey === key) continue
+      if (otherTokens.some((token) => lower.includes(token))) return false
+    }
   }
-  return { dir, natives: picked }
+  return true
+}
+
+/** 取某个包声明的平台原生依赖（dependencies 与 optionalDependencies 都看）。
+ * @param {string} startDir - 从这个目录开始向上找包。
+ * @param {string} name - 包名。
+ * @param {Record<string, string[]>} [seen] - 诊断用：记录每个包声明过的依赖名。
+ */
+function platformNatives(startDir, name, seen) {
+  const found = manifestOf(startDir, name)
+  const declared = { ...found.manifest.dependencies, ...found.manifest.optionalDependencies }
+  const picked = {}
+  for (const [dep, version] of Object.entries(declared)) {
+    if (matchesPlatform(dep)) picked[dep] = version
+  }
+  if (seen !== undefined) seen[name] = Object.keys(declared)
+  return { dir: found.dir, version: found.manifest.version, natives: picked }
 }
 
 /**
@@ -95,9 +126,10 @@ export function patchDesktopComputerUse(root) {
   }
 
   const wanted = { ...RUNTIME_PACKAGES.reduce((acc, name) => ({ ...acc, [name]: 'workspace:*' }), {}) }
+  const declaredSeen = {}
   let sdk
   try {
-    sdk = platformNatives(providerDir, '@trycua/cua-driver')
+    sdk = platformNatives(providerDir, '@trycua/cua-driver', declaredSeen)
   } catch (error) {
     // 现场诊断：这三处就能定位"没装 / 装到别处 / 位置变了"
     const hints = [
@@ -109,7 +141,8 @@ export function patchDesktopComputerUse(root) {
   }
   const sdkNative = Object.keys(sdk.natives).find((name) => name.startsWith('@trycua/cua-driver-'))
   if (sdkNative === undefined) {
-    throw new Error(`patch-desktop-computer-use: @trycua/cua-driver 没有 ${PLATFORM_SUFFIX} 平台原生包`)
+    // 把实际声明过的依赖打出来 —— 下次命名规则再变，这条错误自己就说清了
+    throw new Error(`patch-desktop-computer-use: @trycua/cua-driver@${sdk.version} 里找不到 ${PLATFORM_SUFFIX} 平台的包（它声明的依赖：${(declaredSeen['@trycua/cua-driver'] ?? []).join(', ')}）`)
   }
   Object.assign(wanted, sdk.natives)
 

@@ -150,9 +150,17 @@ test('工具链补丁：两处编辑都能命中且幂等', () => {
 })
 
 test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂等、缺件必须报错', () => {
-  const suffix = `${process.platform}-${process.arch}`
-  const sdkNative = `@trycua/cua-driver-${suffix}`
-  const ubjsNative = `@ubjs/node-${suffix}`
+  // 平台原生的**真实**命名带工具链后缀（win32-x64-msvc / linux-x64-gnu / darwin-arm64）——
+  // 早先按 endsWith('<platform>-<arch>') 匹配，全被 -msvc 顶掉；这条就是那个回归。
+  const NATIVE_SUFFIX = {
+    win32: { x64: 'win32-x64-msvc', arm64: 'win32-arm64-msvc' },
+    linux: { x64: 'linux-x64-gnu', arm64: 'linux-arm64-gnu' },
+    darwin: { x64: 'darwin-x64', arm64: 'darwin-arm64' },
+  }
+  const host = NATIVE_SUFFIX[process.platform]?.[process.arch] ?? `${process.platform}-${process.arch}`
+  const foreign = process.platform === 'win32' ? 'linux-x64-gnu' : 'win32-x64-msvc'
+  const sdkNative = `@trycua/cua-driver-${host}`
+  const ubjsNative = `@ubjs/node-${host}`
 
   /** 造一棵含「提供方 → SDK → ubjs」解析链的假树。 */
   const makeTree = () => {
@@ -169,22 +177,22 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
     })
     const provider = 'packages/experimental/computer-use-cua-driver-native'
     write(`${provider}/package.json`, { name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native', version: '0.0.0' })
-    // 平台原生包是 SDK 的 optionalDependencies —— 第一版补丁就是漏在这里，asar 里连一个 .node 都没有。
-    // exports 只暴露 "."（不暴露 ./package.json）—— 第二版补丁就是被这个挡住的，清单必须靠入口向上找。
+    // SDK 的形状照真实：平台原生包在 optionalDependencies（electron-builder 不收 —— 坑一），
+    // exports 只给 import 条件、不暴露 ./package.json（require 读清单会失败 —— 坑二、三）
     write(`${provider}/node_modules/@trycua/cua-driver/package.json`, {
       name: '@trycua/cua-driver',
       version: '0.28.0',
       main: 'index.js',
-      exports: { '.': './index.js' },
-      optionalDependencies: { [sdkNative]: '0.28.0', '@trycua/cua-driver-darwin-arm64': '0.28.0' },
+      exports: { '.': { import: './index.js' } },
+      optionalDependencies: { [sdkNative]: '0.28.0', [`@trycua/cua-driver-${foreign}`]: '0.28.0' },
     })
-    writeFileSync(join(root, provider, 'node_modules/@trycua/cua-driver/index.js'), 'module.exports = {}\n')
+    writeFileSync(join(root, provider, 'node_modules/@trycua/cua-driver/index.js'), 'export default {}\n')
     write(`${provider}/node_modules/@trycua/cua-driver/node_modules/@ubjs/node/package.json`, {
       name: '@ubjs/node',
       version: '0.31.0-3',
       main: 'index.js',
       exports: { '.': './index.js' },
-      optionalDependencies: { [ubjsNative]: '0.31.0-3', '@ubjs/node-linux-x64-gnu': '0.31.0-3' },
+      optionalDependencies: { [ubjsNative]: '0.31.0-3', [`@ubjs/node-${foreign}`]: '0.31.0-3' },
     })
     writeFileSync(join(root, provider, 'node_modules/@trycua/cua-driver/node_modules/@ubjs/node/index.js'), 'module.exports = {}\n')
     return root
@@ -200,7 +208,8 @@ test('computer-use 补丁：声明注册表 + 提供方 + 平台原生包、幂�
     assert.equal(written.dependencies[sdkNative], '0.28.0', '平台原生包按已安装清单的精确版本声明')
     assert.equal(written.dependencies[ubjsNative], '0.31.0-3')
     assert.equal(written.dependencies['@deepseek-ai/dsh-base'], 'workspace:*', '不能动原有依赖')
-    assert.ok(!('@trycua/cua-driver-darwin-arm64' in written.dependencies), '不声明别的平台')
+    assert.ok(!(`@trycua/cua-driver-${foreign}` in written.dependencies), '不声明别的平台')
+    assert.ok(!(`@ubjs/node-${foreign}` in written.dependencies), 'ubjs 也不声明别的平台')
     assert.deepEqual(patchDesktopComputerUse(root).added, [], '第二次必须无改动（幂等）')
     // 上游改了结构时必须报错，而不是静默加不上、最后打出一个没有原生二进制的包
     writeFileSync(manifestPath, JSON.stringify({ name: '@deepseek-ai/dsh-desktop' }, null, 2) + '\n')
