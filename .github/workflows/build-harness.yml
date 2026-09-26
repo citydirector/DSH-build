@@ -440,6 +440,8 @@ jobs:
       - name: Package portable zip
         shell: pwsh
         run: |
+          # 冒烟测试会留下 data/（含会话 grant、匿名 id、workspace 状态），不进发行包。
+          Remove-Item portable\data -Recurse -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path portable\* -DestinationPath "dsh-portable-win64-${{ needs.check.outputs.short_sha }}.zip"
 
       - uses: actions/upload-artifact@v7
