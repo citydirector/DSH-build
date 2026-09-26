@@ -10,7 +10,7 @@
 //      否则上游 release:pack 的产物摘要校验会失败
 //
 // 用法: node portable/patch-desktop-runtime-patch.mjs <repo-root>
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 

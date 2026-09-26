@@ -3,7 +3,7 @@
 //   1) 源码缺 build 产物时，能从 hoisted 根 node_modules 兜底补齐（schemastery 场景）。
 //   2) 部署图里某 @deepseek-ai 依赖在所有来源都缺失时，终止构建（非零退出）+ 明确报错。
 // 用独立临时 fixture 构造，不依赖真实上游；可本地跑，也可在 CI 里跑。
-import { mkdtemp, writeFile, mkdir, rm, readdir, stat, symlink, lstat } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, stat, symlink, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
