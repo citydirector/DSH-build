@@ -80,7 +80,7 @@ dsh-desktop/
 - 本机深层构建目录下它会因 `site-packages` 超 MAX_PATH 失败（`ERROR_FILENAME_EXCED_RANGE`）
 - CI 上它会因 packaged 布局里的 LibreOffice 原生转换返回空引用而失败；同一运行时的准备阶段冒烟（`prepare:dsh`）在 CI 上是通过的
 
-需要时用 `DSH_DESKTOP_RUN_PACKAGED_SMOKE=1` 打开。产物本身另有 `verify-desktop.mjs`（24 项静态验收）。
+需要时用 `DSH_DESKTOP_RUN_PACKAGED_SMOKE=1` 打开。产物本身另有 `verify-desktop.mjs`（静态验收）。
 
 ## 流水线与验收
 
@@ -91,8 +91,8 @@ dsh-desktop/
 3. P1：`patch-native-code.mjs` 扫已构建的 `lib`
 4. 生成会话迁移器 `migrate-sessions-v4.mjs`
 5. 打包：`pnpm --filter @deepseek-ai/dsh-desktop run package:win:x64:unsigned -- --dir`（免签名、只出解包目录；带 `DSH_DESKTOP_SKIP_INTERNAL_BUILD=1`）
-6. 组装绿色包：复制 `win-unpacked` + 写 `portable.flag`/`VERSION`/`update.json` + 放迁移器与 `update.exe` + `data/` 骨架 + 复制 `portable/desktop-seed/`
-7. 压缩为 `dsh-desktop-win64-<sha>.zip`，并跑 `portable/verify-desktop.mjs` 做静态验收（24 项：无 feed、manifest 无策略、便携引导已编入、三项运行时补丁都在产物里、数据布局与习惯种子齐全）
+6. 组装绿色包：复制 `win-unpacked` + 写 `portable.flag`/`VERSION`/`update.json` + 放迁移器与 `update.exe` + 不打包任何 `data/`（`DSH_HOME` 由 app 首启创建）
+7. 压缩为 `dsh-desktop-win64-<sha>.zip`，并跑 `portable/verify-desktop.mjs` 做静态验收（静态验收：无 feed、manifest 无策略、便携引导已编入、三项运行时补丁都在产物里、不打包 `data/` 且不含个人数据）
 
 本机调试（可选环境变量）：`DSH_DESKTOP_SOURCE` 指上游检出、`DSH_DESKTOP_TAG` 指 sha、`DSH_DESKTOP_OUT` 产出目录、`DSH_DESKTOP_EXTRA_PATH`/`DSH_DESKTOP_TEMP_DIR` 补本机 PATH 与临时目录。
 
