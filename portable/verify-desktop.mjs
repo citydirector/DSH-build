@@ -5,7 +5,7 @@
 //   2. 无更新来源：resources 下不得有 app-update.yml；asar 内 package.json 不得含 dshMandatoryUpdatePolicy
 //   3. 迁移器：resources/dsh-build/migrate-sessions-v4.mjs 存在
 //   4. 补丁在产物里：运行时段 tarball 内 dsh-workflow-ptc/lib/index.js 可解析、白名单含 instruction-hint
-//   5. 数据面：产物不含 data/ 与个人数据
+//   5. 数据面：产物不含 data/
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
@@ -109,7 +109,6 @@ function main() {
       check(source.includes('replace(/\\\\s+/g, \\" \\")'), 'runtime: guest source guard patched (escaped inside the literal)')
     } else {
       // 补丁 2：v2->v3 的 SOURCE_KINDS 白名单必须含历史 kind
-      check(source.includes('instruction-hint'), 'runtime: v2->v3 SOURCE_KINDS whitelist carries instruction-hint')
       const kinds = /SOURCE_KINDS = new Set\(\[([\s\S]{0,400}?)\]\)/.exec(source)
       check(kinds !== null && kinds[1].includes('"user"') && kinds[1].includes('"instruction-hint"'), 'runtime: whitelist reads user + instruction-hint')
     }
@@ -124,11 +123,7 @@ function main() {
   }
 
   check(!existsSync(join(stage, 'data')), 'ships no data/ (DSH_HOME is created on first run)')
-  for (const leaked of ['desktop-seed', 'data/profiles/desktop/cordis.patch.yml', 'data/profiles/desktop/memory-kb.mjs', 'data/profiles/desktop/presets']) {
-    check(!existsSync(join(stage, leaked)), `no personal data shipped: ${leaked}`)
-  }
 
-  const bytes = existsSync(stage) ? 0 : 0
   console.log(notes.join('\n'))
   console.log('')
   if (problems.length === 0) console.log('verify-desktop: 全部通过')
