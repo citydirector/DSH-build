@@ -118,6 +118,46 @@ function main() {
     problems.push(`FAIL lib/main.js — ${error instanceof Error ? error.message : String(error)}`)
   }
 
+  // computer-use：注册表 + 原生提供方必须打进 asar，SDK 的原生二进制必须在 app.asar.unpacked。
+  // 打包之后补不进去（asar 结构 + 原生模块必须 unpack），所以只能靠打包前的依赖声明带上；
+  // 匹配用「路径后缀」而不是写死前缀 —— asar 内的布局随上游打包方式变，写死会假失败。
+  try {
+    const buffer = readFileSync(asarPath)
+    const { header } = readAsarHeader(buffer)
+    const asarPaths = []
+    const walkAsar = (node, prefix) => {
+      for (const [name, child] of Object.entries(node.files ?? {})) {
+        const path = prefix === '' ? name : prefix + '/' + name
+        if (child.files !== undefined) walkAsar(child, path)
+        else asarPaths.push(path)
+      }
+    }
+    walkAsar(header, '')
+    for (const suffix of [
+      '@deepseek-ai/dsh-computer-use/package.json',
+      '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
+      '@trycua/cua-driver/package.json',
+    ]) check(asarPaths.some((path) => path.endsWith(suffix)), 'computer-use: ' + suffix + ' in asar')
+
+    const nativeFiles = []
+    const walkUnpacked = (dir, depth) => {
+      if (depth > 6) return
+      let entries
+      try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const entry of entries) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) walkUnpacked(path, depth + 1)
+        else if (entry.name.endsWith('.node')) nativeFiles.push(path)
+      }
+    }
+    if (existsSync(unpackedRoot)) walkUnpacked(unpackedRoot, 0)
+    const cuaNative = nativeFiles.filter((path) => /cua|ubjs/u.test(path))
+    check(cuaNative.length > 0, 'computer-use: Cua Driver 原生二进制已 unpack',
+      nativeFiles.length === 0 ? 'app.asar.unpacked 里没有任何 .node' : 'unpacked 里的 .node：' + nativeFiles.slice(0, 4).join(', '))
+  } catch (error) {
+    problems.push(`FAIL computer-use surface — ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   check(!existsSync(join(stage, 'data')), 'ships no data/ (DSH_HOME is created on first run)')
 
   console.log(notes.join('\n'))

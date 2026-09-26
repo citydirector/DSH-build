@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { patchDesktopUpdate, isPatched as updatePatched, EDITS } from '../portable/patch-desktop-update.mjs'
 import { patchDesktopPortable } from '../portable/patch-desktop-portable.mjs'
 import { patchDesktopToolchain, EDITS as TOOLCHAIN_EDITS } from '../portable/patch-desktop-toolchain.mjs'
+import { patchDesktopComputerUse, RUNTIME_PACKAGES } from '../portable/patch-desktop-computer-use.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const files = resolve(HERE, '..', 'portable', 'desktop-files')
@@ -145,6 +146,28 @@ test('工具链补丁：两处编辑都能命中且幂等', () => {
     const builder = readFileSync(join(root, 'apps/desktop/scripts/electron-builder-config.mjs'), 'utf8')
     assert.ok(builder.includes('prepare-windows-installer.ps1'))
     assert.ok(builder.includes("env.DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN !== '1'"))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('computer-use 补丁：声明两个运行时依赖、幂等、结构变化必须报错', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-cua-'))
+  const manifestPath = join(root, 'apps/desktop/package.json')
+  try {
+    mkdirSync(join(root, 'apps/desktop'), { recursive: true })
+    writeFileSync(manifestPath, JSON.stringify({
+      name: '@deepseek-ai/dsh-desktop',
+      version: '0.0.0',
+      dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' },
+    }, null, 2) + '\n')
+    const first = patchDesktopComputerUse(root)
+    assert.deepEqual(first.added, RUNTIME_PACKAGES)
+    const written = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    for (const name of RUNTIME_PACKAGES) assert.equal(written.dependencies[name], 'workspace:*')
+    assert.equal(written.dependencies['@deepseek-ai/dsh-base'], 'workspace:*', '不能动原有依赖')
+    assert.deepEqual(patchDesktopComputerUse(root).added, [], '第二次必须无改动（幂等）')
+    // 上游改了结构（没有 dependencies 对象）时必须报错，而不是静默加不上、最后打出一个没有 SDK 的包
+    writeFileSync(manifestPath, JSON.stringify({ name: '@deepseek-ai/dsh-desktop' }, null, 2) + '\n')
+    assert.throws(() => patchDesktopComputerUse(root), /dependencies/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

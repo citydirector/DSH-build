@@ -122,6 +122,14 @@ function main() {
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-runtime-patch.mjs'), SOURCE])
+  run('patch', process.execPath, [join(HERE, 'patch-desktop-computer-use.mjs'), SOURCE])
+
+  // 上面刚声明的新依赖得真的落到 node_modules 里才进得了 asar：workflow 那次 install 在源码补丁
+  // **之前**、而且是 --frozen-lockfile，新加的项它不认识。跑一次非 frozen 的全量 install —— 这里
+  // 是 CI 的临时 checkout，改 package.json/lockfile 都不会回传。
+  log('1b/7', 'installing the runtime dependency declared above (computer-use)')
+  const deps = pnpmInvocation(['install', '--no-frozen-lockfile', '--config.allowUnusedPatches=true'])
+  run('deps', deps.command, deps.args, { shell: deps.shell })
 
   if (!has('--skip-build')) {
     log('2/7', 'building upstream repository (official profile)')
