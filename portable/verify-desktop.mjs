@@ -8,15 +8,12 @@
 //   5. 数据面：产物不含 data/
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const TAR = 'C:\\Windows\\System32\\tar.exe'
 
 /** 读 asar 头，取回内部文件的偏移与长度。 */
 export function readAsarHeader(buffer) {
@@ -37,18 +34,6 @@ export function readAsarFile(buffer, path) {
   if (typeof node.offset !== 'string' && typeof node.offset !== 'number') throw new Error(`asar: ${path} is a directory`)
   const start = dataOffset + Number(node.offset)
   return buffer.subarray(start, start + Number(node.size))
-}
-
-/** 在目录树里递归找匹配文件。 */
-export function findFiles(root, predicate, depth = 0) {
-  if (depth > 6 || !existsSync(root)) return []
-  const found = []
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const path = join(root, entry.name)
-    if (entry.isDirectory()) found.push(...findFiles(path, predicate, depth + 1))
-    else if (predicate(path)) found.push(path)
-  }
-  return found
 }
 
 function main() {
