@@ -26,7 +26,7 @@
 //
 // 用法: node patch-desktop-computer-use.mjs <repo-root>
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+
 import { dirname, join } from 'node:path'
 
 const APP_PACKAGE = 'apps/desktop/package.json'
@@ -41,32 +41,39 @@ export const RUNTIME_PACKAGES = [
   '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native',
 ]
 
-/** 解析包入口后向上找最近的 package.json（绕开 exports 不暴露 ./package.json 的包）。 */
-function manifestOf(req, name) {
-  let dir
-  try {
-    dir = dirname(req.resolve(name))
-  } catch (error) {
-    throw new Error(`patch-desktop-computer-use: 解析不到 ${name} 的入口（构建树里没装？）`, { cause: error })
-  }
-  for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = join(dir, 'package.json')
-    if (existsSync(candidate)) return { dir, manifest: JSON.parse(readFileSync(candidate, 'utf8')) }
+/** 逐级向上找 `<dir>/node_modules/<name>` —— 就是 node 的解析算法，但不走 exports，
+ * 于是既能处理"exports 不暴露 ./package.json"，也能处理 ESM-only 包（只有 import 条件时
+ * require.resolve 会失败）。pnpm 的 isolated 布局里那些链接也照常命中。 */
+function findPackage(startDir, name) {
+  let dir = startDir
+  for (let depth = 0; depth < 12; depth += 1) {
+    const packageDir = join(dir, 'node_modules', name)
+    const candidate = join(packageDir, 'package.json')
+    if (existsSync(candidate)) {
+      return { dir: packageDir, manifest: JSON.parse(readFileSync(candidate, 'utf8')) }
+    }
     const parent = dirname(dir)
     if (parent === dir) break
     dir = parent
   }
-  throw new Error(`patch-desktop-computer-use: ${name} 的目录树里找不到 package.json（入口 ${dir}）`)
+  return undefined
+}
+
+/** 取包清单；找不到就抛错（由调用方补现场信息）。 */
+function manifestOf(startDir, name) {
+  const found = findPackage(startDir, name)
+  if (found === undefined) throw new Error(`patch-desktop-computer-use: 在 ${startDir} 往上的 node_modules 里找不到 ${name}`)
+  return found
 }
 
 /** 从某个包的清单里挑出与构建平台匹配的原生 optionalDependencies。 */
-function platformNatives(req, name) {
-  const { manifest } = manifestOf(req, name)
+function platformNatives(startDir, name) {
+  const { dir, manifest } = manifestOf(startDir, name)
   const picked = {}
   for (const [dep, version] of Object.entries(manifest.optionalDependencies ?? {})) {
     if (dep.endsWith(PLATFORM_SUFFIX)) picked[dep] = version
   }
-  return picked
+  return { dir, natives: picked }
 }
 
 /**
@@ -81,37 +88,35 @@ export function patchDesktopComputerUse(root) {
     throw new Error(`patch-desktop-computer-use: ${APP_PACKAGE} 没有 dependencies 对象，上游改了结构？`)
   }
 
-  const providerManifest = join(root, PROVIDER_DIR, 'package.json')
+  const providerDir = join(root, PROVIDER_DIR)
+  const providerManifest = join(providerDir, 'package.json')
   if (!existsSync(providerManifest)) {
     throw new Error(`patch-desktop-computer-use: 找不到提供方目录 ${PROVIDER_DIR}，上游挪了位置？`)
   }
-  const providerReq = createRequire(providerManifest)
 
   const wanted = { ...RUNTIME_PACKAGES.reduce((acc, name) => ({ ...acc, [name]: 'workspace:*' }), {}) }
-  let sdkNatives
+  let sdk
   try {
-    sdkNatives = platformNatives(providerReq, '@trycua/cua-driver')
+    sdk = platformNatives(providerDir, '@trycua/cua-driver')
   } catch (error) {
     // 现场诊断：这三处就能定位"没装 / 装到别处 / 位置变了"
     const hints = [
-      `provider/node_modules=${existsSync(join(root, PROVIDER_DIR, 'node_modules'))}`,
+      `provider/node_modules=${existsSync(join(providerDir, 'node_modules'))}`,
       `root/node_modules/@trycua=${existsSync(join(root, 'node_modules', '@trycua'))}`,
-      `root/node_modules/.pnpm/@trycua*=${existsSync(join(root, 'node_modules', '.pnpm'))}`,
+      `root/node_modules/.pnpm=${existsSync(join(root, 'node_modules', '.pnpm'))}`,
     ].join(' ')
     throw new Error(`${error instanceof Error ? error.message : String(error)} [${hints}]`, { cause: error })
   }
-  const sdkNative = Object.keys(sdkNatives).find((name) => name.startsWith('@trycua/cua-driver-'))
+  const sdkNative = Object.keys(sdk.natives).find((name) => name.startsWith('@trycua/cua-driver-'))
   if (sdkNative === undefined) {
     throw new Error(`patch-desktop-computer-use: @trycua/cua-driver 没有 ${PLATFORM_SUFFIX} 平台原生包`)
   }
-  Object.assign(wanted, sdkNatives)
+  Object.assign(wanted, sdk.natives)
 
   // ubjs 的平台原生（@ubjs/node-<suffix>）挂在 SDK 的解析基准下；没有平台原生依赖是正常的
-  const sdkEntry = manifestOf(providerReq, '@trycua/cua-driver')
-  const sdkReq = createRequire(join(sdkEntry.dir, 'package.json'))
   for (const name of ['@ubjs/core', '@ubjs/node']) {
     try {
-      Object.assign(wanted, platformNatives(sdkReq, name))
+      Object.assign(wanted, platformNatives(sdk.dir, name).natives)
     } catch {
       // 忽略：该包可能没有平台原生依赖
     }
