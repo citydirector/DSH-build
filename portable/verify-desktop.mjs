@@ -98,6 +98,17 @@ function main() {
       check(kinds !== null && kinds[1].includes('"user"') && kinds[1].includes('"instruction-hint"'), 'runtime: whitelist reads user + instruction-hint')
     }
   }
+  // P4：会话写锁名必须由 canonical 路径派生，否则经软链/联接点到达的同一文件会有两把锁。
+  const lockEntry = 'dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js'
+  try {
+    const lockSource = existsSync(join(unpackedRoot, lockEntry))
+      ? readFileSync(join(unpackedRoot, lockEntry), 'utf8')
+      : readAsarFile(readFileSync(asarPath), lockEntry).toString('utf8')
+    check(lockSource.includes('canonicalLockPath'), 'runtime: session lock name hashes the canonical path')
+  } catch (error) {
+    problems.push(`FAIL session lock surface — ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   // 便携引导：打包进 asar 的 main.js 必须带我们的 bootstrap
   try {
     const mainSource = readAsarFile(readFileSync(asarPath), 'lib/main.js').toString('utf8')

@@ -247,6 +247,9 @@ jobs:
       - name: Run patch-native-code tests
         shell: pwsh
         run: node _build_repo/tests/patch-native-code.test.mjs
+      - name: Run patch-session-lock tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-session-lock.test.mjs
 
       # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
       # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
@@ -328,6 +331,7 @@ jobs:
         shell: pwsh
         run: |
           node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
+          node _build_repo\portable\patch-session-lock.mjs portable\app\node_modules\@deepseek-ai
 
       # 迁移器装载校验：--help 之前会先解析全部 import。这一步专门验证迁移器的 external
       # 依赖（cordis / dsh-session / format-catalog / persistence-jsonl …）确实落在
@@ -501,6 +505,9 @@ jobs:
       - name: Run desktop patch tests
         shell: pwsh
         run: node _build_repo/tests/patch-desktop.test.mjs
+      - name: Run patch-session-lock tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-session-lock.test.mjs
 
       # 编译清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
       - name: Compile updater

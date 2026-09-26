@@ -132,6 +132,9 @@ function main() {
   // P1 必须写在运行时段打包成 tarball 之前，且必须在构建之后。
   log('3/7', 'P1: patching built lib files (native-code guard + v2->v3 whitelist)')
   run('P1', process.execPath, [join(HERE, 'patch-native-code.mjs'), SOURCE])
+  // P4 改的是 session-persistence 的锁名派生，必须与 P1 一样落在打包前的已构建 lib 上。
+  log('3c/7', 'P4: hashing the canonical path into the Windows session lock name')
+  run('P4', process.execPath, [join(HERE, 'patch-session-lock.mjs'), SOURCE])
   // P1 会改动个别客户端产物（如 packages/api/session-controller/lib/client.js），
   // 而客户端构建记录是 build:official 结束时算的；在其后重算，release:pack 的摘要校验才看得到真实产物。
   log('3b/7', 'refreshing the client build record after P1')
