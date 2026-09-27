@@ -3,9 +3,10 @@
 //       树里找不到包要报错 / 0xC0000142 变成可分类的 runner 失败 / koffi 缺失要给出可读失败 /
 //       asar 重打包的结构与字节保真 + 幂等。
 //
-// 说明: AllocConsole 的真实效果只能在 GUI 子系统的宿主里观察（Electron），仓库测试跑在
-// console 子系统的 node 上，因此这里只做文本与行为契约；Electron 侧的效果由
-// DSH-build 之外的实机验证脚本（工具/_verify_acl_console.mjs 同型）单独证明。
+// 说明: AllocConsole 的真实效果只能在 GUI 子系统的宿主（Electron）里观察，而仓库测试跑在
+// console 子系统的 node 上，因此这里只做文本与行为契约。该效果在 Electron 宿主下另有实测：
+// windowsHide（= CREATE_NO_WINDOW，即真实链路的条件）下，未分配控制台时受限子进程
+// exit 0xC0000142 且 stderr 为空，分配后 exit 0、stdout 正常透传、std 句柄不变。
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
