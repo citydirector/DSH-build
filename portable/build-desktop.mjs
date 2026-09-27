@@ -118,12 +118,17 @@ function main() {
   }
 
   writePackageEnvironment()
-  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order)')
+  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / acl console)')
   run('patch', process.execPath, [join(HERE, 'patch-desktop-update.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-runtime-patch.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-computer-use.mjs'), SOURCE])
+  // AclSandbox 用 creationFlags 0 起受限子进程，子进程因此挂在**跑 runner 的那个进程**的控制台上；
+  // Electron 是 GUI 子系统、永远不持有控制台 → 桌面端每条受限命令都在 DLL 初始化阶段以 0xC0000142
+  // 静默死亡（stderr 全空，seam 归类不了）。修在源码阶段：由 build:official 编译进产物，
+  // 既不用改已构建 lib，也不用重打包 app.asar。锚点对 upstream.pin 已逐条校验。
+  run('patch', process.execPath, [join(HERE, 'patch-windows-acl-runner-console.mjs'), SOURCE])
 
   // 上面刚声明的新依赖得真的落到 node_modules 里才进得了 asar：workflow 那次 install 在源码补丁
   // **之前**、而且是 --frozen-lockfile，新加的项它不认识。跑一次非 frozen 的全量 install —— 这里
@@ -145,6 +150,7 @@ function main() {
   // P4 改的是 session-persistence 的锁名派生，必须与 P1 一样落在打包前的已构建 lib 上。
   log('3c/7', 'P4: hashing the canonical path into the Windows session lock name')
   run('P4', process.execPath, [join(HERE, 'patch-session-lock.mjs'), SOURCE])
+  // 注意：ACL 控制台那处修在**源码**阶段（见上面的 patch-windows-acl-runner-console），不在这里。
   // P1 会改动个别客户端产物（如 packages/api/session-controller/lib/client.js），
   // 而客户端构建记录是 build:official 结束时算的；在其后重算，release:pack 的摘要校验才看得到真实产物。
   log('3b/7', 'refreshing the client build record after P1')
