@@ -14,11 +14,6 @@
 // 空 stderr 让 seam 的 RUNNER_FAILURE_RULES（`allowedExitCodes:[127]` + `fatalSignatures:
 // ["windows-acl-run: "]`）匹配不上，模型只看到裸的 `[exit code: 3221225794]`。
 //
-// 修法两处：
-//   1. runner 在 spawn 之前确认自己持有控制台（没有就 `AllocConsole()` 并把窗口藏掉）；
-//   2. 子进程若仍以 0xC0000142 退出，按 runner 失败契约报出来（签名 + exit 127），
-//      从而被归类为「沙箱启动失败」而不是「命令失败」。
-//
 // 为什么**不要**改成「把 runner 解释器换成真 node」：桌面端这些包是从 `resources/app.asar`
 // **内部**加载的，`import.meta.resolve('@deepseek-ai/dsh-sandbox-windows-acl/runner')` 返回的是
 // asar 内部路径，而普通 `node.exe` 读不了 asar 内部路径（实测 plain node 对该路径 ENOENT，
@@ -103,11 +98,10 @@ const TARGETS = [
           + '\n'
           + '/** STATUS_DLL_INIT_FAILED: the restricted child never reached its entry point. */\n'
           + 'const STATUS_DLL_INIT_FAILED = 0xC0000142\n'
-          + '/** ShowWindow command that hides the window AllocConsole just created. */\n'
           + 'const SW_HIDE = 0\n'
           + '\n'
           + '/**\n'
-          + ' * Make sure this process owns the console the restricted child has to share.\n'
+          + ' * Give this process the console the restricted child has to share.\n'
           + ' *\n'
           + ' * AclSandbox spawns the child with creationFlags 0, so the child attaches to\n'
           + ' * whatever console THIS process owns. A console-subsystem image owns one even\n'
@@ -132,9 +126,7 @@ const TARGETS = [
         from: '  const api = await win32()\n'
           + "  // Ignore this process's own CTRL+C: the confined child (same console) keeps\n",
         to: '  const api = await win32()\n'
-          + '  // The child is spawned with creationFlags 0, so it shares THIS process\n'
-          + "  // console; without one it dies in DLL initialization (0xC0000142, empty\n"
-          + '  // stderr). Acquire it before registering the handler that owns it.\n'
+          + '  // Before the CTRL+C handler below, which is registered against the shared console.\n'
           + '  ensureSharedConsole(api)\n'
           + "  // Ignore this process's own CTRL+C: the confined child (same console) keeps\n",
       },
