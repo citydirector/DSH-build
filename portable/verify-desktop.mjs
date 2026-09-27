@@ -14,29 +14,10 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 // 平台原生包名带工具链后缀（-msvc / -gnu），共用补丁脚本里的词表匹配，免得两处各写一套
 import { matchesPlatformName } from './patch-desktop-computer-use.mjs'
+// asar 格式与重打包工具共用同一份实现（头部 pickle / 数据区起点 / 块间无对齐填充）
+import { parseAsarBuffer, readAsarFile, walkAsarEntries } from './asar-format.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-
-/** 读 asar 头，取回内部文件的偏移与长度。 */
-function readAsarHeader(buffer) {
-  const headerSize = buffer.readUInt32LE(12)
-  const header = JSON.parse(buffer.subarray(16, 16 + headerSize).toString('utf8'))
-  // 文件数据区从 16 + 4 字节对齐后的头长度开始（实测：16+align4(hs) 处正好是第一个 entry 的内容）。
-  return { header, dataOffset: 16 + ((headerSize + 3) & ~3) }
-}
-
-/** 从 asar 里读一个文件（目录树按 slash 分段）。 */
-function readAsarFile(buffer, path) {
-  const { header, dataOffset } = readAsarHeader(buffer)
-  let node = header
-  for (const part of path.split('/')) {
-    node = node?.files?.[part]
-    if (node === undefined) throw new Error(`asar: ${path} not found`)
-  }
-  if (typeof node.offset !== 'string' && typeof node.offset !== 'number') throw new Error(`asar: ${path} is a directory`)
-  const start = dataOffset + Number(node.offset)
-  return buffer.subarray(start, start + Number(node.size))
-}
 
 function main() {
   const { values } = parseArgs({ options: { dir: { type: 'string', default: join(HERE, 'build', 'dsh-desktop') } } })
@@ -113,7 +94,7 @@ function main() {
 
   // 源码补丁（patch-windows-acl-runner-console）：受限子进程与 runner 共享控制台，而 Electron 是
   // GUI 子系统、永远不持有控制台 → runner 必须自备一个，否则桌面端每条受限命令都在 DLL 初始化
-  // 阶段以 0xC0000142 静默死亡。这里断言它确实编译进了打包产物。
+  // 阶段以 0xC0000142 静默死亡。
   const aclRunnerEntry = 'dsh/node_modules/@deepseek-ai/dsh-sandbox-windows-acl/lib/runner.js'
   try {
     const aclRunnerSource = existsSync(join(unpackedRoot, aclRunnerEntry))
@@ -140,16 +121,8 @@ function main() {
   // 带上"实际打进了哪些包"和"asar 里有没有 .node"，这样它自己就能指出是没打包还是没 unpack。
   try {
     const buffer = readFileSync(asarPath)
-    const { header } = readAsarHeader(buffer)
-    const asarPaths = []
-    const walkAsar = (node, prefix) => {
-      for (const [name, child] of Object.entries(node.files ?? {})) {
-        const path = prefix === '' ? name : prefix + '/' + name
-        if (child.files !== undefined) walkAsar(child, path)
-        else asarPaths.push(path)
-      }
-    }
-    walkAsar(header, '')
+    const { header } = parseAsarBuffer(buffer)
+    const asarPaths = walkAsarEntries(header).map(({ path }) => path)
 
     // 关键：必须在**运行时那棵树**（dsh/node_modules）里，而不是 asar 根的 node_modules。
     // asar 里是两棵树 —— 根那棵给 Electron 主程序，dsh/ 那棵给 harness；profile 的插件行是在

@@ -43,6 +43,8 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// asar 格式与校验脚本共用同一份实现（头部 pickle / 数据区起点 / 块间无对齐填充）
+import { packAsarHeader, parseAsarHeader, walkAsarEntries } from './asar-format.mjs'
 
 /** Marker proving the shared-console helper was injected. */
 const CONSOLE_MARKER = 'ensureSharedConsole'
@@ -159,10 +161,6 @@ const STATUS_DLL_INIT_FAILED = 0xC0000142;
   },
 ]
 
-/** 4-byte ceiling: the alignment every asar pickle uses for its payload. */
-function align4(value) {
-  return Math.ceil(value / 4) * 4
-}
 
 /** How many times an anchor occurs. `split` cannot count a pattern with capture groups---
  * it splices the captures into its own result---so regex anchors are counted with matchAll. */
@@ -324,55 +322,15 @@ function readAsarHeader(path) {
   try {
     const sizePickle = Buffer.alloc(8)
     if (readSync(fd, sizePickle, 0, 8, 0) !== 8) throw new Error(`${path}: truncated size pickle`)
-    if (sizePickle.readUInt32LE(0) !== 4) throw new Error(`${path}: unexpected size-pickle payload`)
     const headerSize = sizePickle.readUInt32LE(4)
     const headerPickle = Buffer.alloc(headerSize)
     if (readSync(fd, headerPickle, 0, headerSize, 8) !== headerSize) throw new Error(`${path}: truncated header`)
-    const jsonSize = headerPickle.readUInt32LE(4)
-    const header = JSON.parse(headerPickle.toString('utf8', 8, 8 + jsonSize))
-    if (header.files === undefined) throw new Error(`${path}: header has no files map`)
-    if (headerSize !== align4(jsonSize) + 8) throw new Error(`${path}: header pickle and json length disagree`)
-    return { fd, header, dataOffset: 8 + headerSize }
+    const { header, dataOffset } = parseAsarHeader(sizePickle, headerPickle)
+    return { fd, header, dataOffset }
   } catch (error) {
     closeSync(fd)
     throw error
   }
-}
-
-/**
- * Walk every file entry of an asar header in header order.
- * @param header - parsed asar header.
- * @returns entries with their archive-relative path and owning object.
- */
-function asarEntries(header) {
-  const entries = []
-  const visit = (node, prefix) => {
-    for (const [name, entry] of Object.entries(node.files ?? {})) {
-      const path = prefix === '' ? name : `${prefix}/${name}`
-      if (entry.files !== undefined) visit(entry, path)
-      else entries.push({ path, entry })
-    }
-  }
-  visit(header, '')
-  return entries
-}
-
-/**
- * Serialize an asar header into its size pickle plus header pickle.
- * @param header - header object.
- * @returns the two buffers written before the data region, plus the new data base.
- */
-function packAsarHeader(header) {
-  const json = Buffer.from(JSON.stringify(header), 'utf8')
-  const headerSize = align4(json.length) + 8
-  const sizePickle = Buffer.alloc(8)
-  sizePickle.writeUInt32LE(4, 0)
-  sizePickle.writeUInt32LE(headerSize, 4)
-  const headerPickle = Buffer.alloc(headerSize)
-  headerPickle.writeUInt32LE(headerSize - 4, 0)
-  headerPickle.writeUInt32LE(json.length, 4)
-  json.copy(headerPickle, 8)
-  return { sizePickle, headerPickle, dataOffset: 8 + headerSize }
 }
 
 /** Copy one byte range between descriptors without materializing it twice. */
@@ -396,7 +354,7 @@ function copyRange(from, to, length, fromPosition, toPosition) {
  * @returns archive-relative path to replacement buffer.
  */
 function asarReplacements(input, source) {
-  const entries = asarEntries(source.header)
+  const entries = walkAsarEntries(source.header)
   const replacements = new Map()
   for (const target of TARGETS) {
     const members = entries.filter(({ path }) =>
@@ -433,7 +391,7 @@ function patchAsar(input, output) {
     // overwritten in place, so reading it afterwards would read the wrong bytes.
     const blocks = []
     let offset = 0
-    for (const { path, entry } of asarEntries(source.header)) {
+    for (const { path, entry } of walkAsarEntries(source.header)) {
       if (entry.files !== undefined || entry.unpacked === true) continue
       const replacement = replacements.get(path)
       const size = replacement === undefined ? Number(entry.size) : replacement.length
@@ -483,8 +441,8 @@ function verifyAsar(input, output, replacements) {
   const source = readAsarHeader(input)
   const written = readAsarHeader(output)
   try {
-    const original = new Map(asarEntries(source.header).map(({ path, entry }) => [path, entry]))
-    const entries = asarEntries(written.header)
+    const original = new Map(walkAsarEntries(source.header).map(({ path, entry }) => [path, entry]))
+    const entries = walkAsarEntries(written.header)
     if (entries.length !== original.size) throw new Error('asar: entry count changed')
     let dataBytes = 0
     for (const { path, entry } of entries) {
