@@ -8,10 +8,12 @@
 //   5. 数据面：产物不含 data/
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+// 平台原生包名带工具链后缀（-msvc / -gnu），共用补丁脚本里的词表匹配，免得两处各写一套
+import { matchesPlatformName } from './patch-desktop-computer-use.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -116,6 +118,89 @@ function main() {
     check(/session-v4-|MIGRATION_MARKER|migrate-sessions-v4\.mjs/.test(mainSource), 'session-migration hook compiled into lib/main.js')
   } catch (error) {
     problems.push(`FAIL lib/main.js — ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // computer-use：注册表 + 提供方 + SDK + 平台原生包必须打进 asar，原生 .node 必须在
+  // app.asar.unpacked（electron 不能从 asar 里加载原生模块）。打包之后补不进去，只能靠打包前的
+  // 依赖声明带上。包名一律用词表匹配（工具链后缀 -msvc / -gnu 会变，写死会假失败）；失败信息里
+  // 带上"实际打进了哪些包"和"asar 里有没有 .node"，这样它自己就能指出是没打包还是没 unpack。
+  try {
+    const buffer = readFileSync(asarPath)
+    const { header } = readAsarHeader(buffer)
+    const asarPaths = []
+    const walkAsar = (node, prefix) => {
+      for (const [name, child] of Object.entries(node.files ?? {})) {
+        const path = prefix === '' ? name : prefix + '/' + name
+        if (child.files !== undefined) walkAsar(child, path)
+        else asarPaths.push(path)
+      }
+    }
+    walkAsar(header, '')
+
+    // 关键：必须在**运行时那棵树**（dsh/node_modules）里，而不是 asar 根的 node_modules。
+    // asar 里是两棵树 —— 根那棵给 Electron 主程序，dsh/ 那棵给 harness；profile 的插件行是在
+    // dsh/ 里解析的。第一版就是把依赖声明在 apps/desktop 上（落到根那棵），行找不到包 → 静默
+    // 不加载（提供方不激活、工具不注册，不报错也不崩）。这里按位置断言，把那个坑钉住。
+    const runtimePaths = asarPaths.filter((path) => path.startsWith('dsh/node_modules/'))
+    for (const suffix of [
+      '@deepseek-ai/dsh-computer-use/package.json',
+      '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
+      '@trycua/cua-driver/package.json',
+    ]) {
+      const inRuntime = runtimePaths.some((path) => path.endsWith(suffix))
+      const elsewhere = asarPaths.filter((path) => path.endsWith(suffix) && !path.startsWith('dsh/node_modules/'))
+      check(inRuntime, 'computer-use: ' + suffix + ' in 运行时树 dsh/node_modules',
+        elsewhere.length > 0 ? '只出现在别处（' + elsewhere[0] + '）→ 插件行解析不到' : '两棵树里都没有')
+    }
+
+    /** 收集运行时树里某个前缀下的包名（不含路径）。 */
+    const packagesUnder = (prefix) => [...new Set(runtimePaths
+      .filter((path) => path.includes(prefix) && path.endsWith('/package.json'))
+      .map((path) => path.slice(path.indexOf(prefix), path.length - '/package.json'.length)))]
+    for (const [label, prefix] of [['SDK', '@trycua/cua-driver-'], ['ubjs', '@ubjs/']]) {
+      const found = packagesUnder(prefix).filter((name) => matchesPlatformName(name))
+      check(found.length > 0, `computer-use: ${label} 平台原生包 in 运行时树`,
+        '运行时树里打进去的：' + (packagesUnder(prefix).join(', ') || '（一个都没有）'))
+    }
+
+    const nativeFiles = []
+    const walkUnpacked = (dir, depth) => {
+      if (depth > 6) return
+      let entries
+      try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const entry of entries) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) walkUnpacked(path, depth + 1)
+        else if (entry.name.endsWith('.node')) nativeFiles.push(path)
+      }
+    }
+    if (existsSync(unpackedRoot)) walkUnpacked(unpackedRoot, 0)
+    const cuaNative = nativeFiles.filter((path) => /cua|ubjs/u.test(path))
+    const asarNodeFiles = asarPaths.filter((path) => path.endsWith('.node'))
+    check(cuaNative.length > 0, 'computer-use: Cua Driver 原生二进制已 unpack', cuaNative.length > 0 ? ''
+      : asarNodeFiles.length > 0
+        ? `asar 里有 ${asarNodeFiles.length} 个 .node 却没 unpack（需要 asarUnpack）：` + asarNodeFiles.slice(0, 3).join(', ')
+        : 'asar 与 app.asar.unpacked 里都没有 .node（原生包没被打进闭包）')
+
+    // 光解 .node/.dll 不够：SDK 的**JS** 也必须在真实路径上。它靠 import.meta.url 定位原生库，
+    // 再交给原生代码（Rust LoadLibrary）打开 —— 原生代码不走 Electron 的 asar 垫片，JS 留在 asar
+    // 里的结果是拿到 …/app.asar/… 打不开，提供方 apply 抛错、只写 stderr、表现成"静默不激活"。
+    for (const rel of [
+      'dsh/node_modules/@trycua/cua-driver/dist/index.js',
+      'dsh/node_modules/@trycua/cua-driver/dist/native/cua_driver_contract-ffi.js',
+    ]) {
+      const unpacked = join(unpackedRoot, rel)
+      const inAsarOnly = existsSync(join(stage, 'resources/app.asar')) && asarPaths.includes(rel)
+      check(existsSync(unpacked), 'computer-use: ' + rel.replace('dsh/node_modules/', '') + ' 已 unpack',
+        inAsarOnly ? '只留在 asar 里 → import.meta.url 会指向 app.asar，原生库打不开' : '既不在 unpacked 也不在 asar')
+    }
+    // 原生库在 asar 里打不开（实测 os error 126）——所以要确认 @ubjs 的路径解析带上了 asar→unpacked 映射。
+    const ubjsLib = join(unpackedRoot, 'dsh/node_modules/@ubjs/node/typescript/dist/resolve-lib.js')
+    const ubjsText = existsSync(ubjsLib) ? readFileSync(ubjsLib, 'utf8') : ''
+    check(ubjsText.includes('dsh-build asar fix'), 'computer-use: @ubjs resolveLibPath 带 asar→unpacked 映射',
+      ubjsText === '' ? 'app.asar.unpacked 里没有 resolve-lib.js（@ubjs 没整树解出来？）' : '没打上补丁 → 原生库会以 os error 126 失败')
+  } catch (error) {
+    problems.push(`FAIL computer-use surface — ${error instanceof Error ? error.message : String(error)}`)
   }
 
   check(!existsSync(join(stage, 'data')), 'ships no data/ (DSH_HOME is created on first run)')

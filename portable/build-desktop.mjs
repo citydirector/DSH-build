@@ -14,6 +14,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFile
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { patchUbjsFile } from './patch-desktop-computer-use.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..')
@@ -122,12 +123,21 @@ function main() {
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-runtime-patch.mjs'), SOURCE])
+  run('patch', process.execPath, [join(HERE, 'patch-desktop-computer-use.mjs'), SOURCE])
+
+  // 上面刚声明的新依赖得真的落到 node_modules 里才进得了 asar：workflow 那次 install 在源码补丁
+  // **之前**、而且是 --frozen-lockfile，新加的项它不认识。跑一次非 frozen 的全量 install —— 这里
+  // 是 CI 的临时 checkout，改 package.json/lockfile 都不会回传。
+  log('1b/7', 'installing the runtime dependency declared above (computer-use)')
+  const deps = pnpmInvocation(['install', '--no-frozen-lockfile', '--config.allowUnusedPatches=true'])
+  run('deps', deps.command, deps.args, { shell: deps.shell })
 
   if (!has('--skip-build')) {
     log('2/7', 'building upstream repository (official profile)')
     const build = pnpmInvocation(['run', 'build:official'])
     run('build', build.command, build.args, { shell: build.shell })
   } else log('2/7', 'build skipped')
+
 
   // P1 必须写在运行时段打包成 tarball 之前，且必须在构建之后。
   log('3/7', 'P1: patching built lib files (native-code guard + v2->v3 whitelist)')
@@ -183,6 +193,16 @@ function main() {
   const updateExe = resolve(process.env.DSH_DESKTOP_UPDATE_EXE ?? join(HERE, 'update.exe'))
   if (existsSync(updateExe)) cpSync(updateExe, join(STAGE, 'update.exe'))
   else log('assemble', 'WARN update.exe missing; the package ships without the manifest-aware updater')
+  // @ubjs 的 asar→unpacked 映射：dsh 树是**打包阶段**才从 tarball + pnpm 装出来的，构建期打不到它
+  // （实测那一步谎报"已在位"，打包产物里却是干净的）。asar 外那份是真实文件，Electron 读 asar
+  // 路径时会重定向到它 —— 所以在这里补最后一次。
+  const stageLib = join(STAGE, 'resources', 'app.asar.unpacked', 'dsh', 'node_modules', '@ubjs',
+    'node', 'typescript', 'dist', 'resolve-lib.js')
+  if (existsSync(stageLib)) {
+    log('assemble', patchUbjsFile(stageLib) ? '@ubjs asar 映射：已补打到打包产物' : '@ubjs asar 映射：打包产物已带')
+  } else {
+    log('assemble', 'WARN 打包产物里没有 ' + stageLib + '（原生库映射未打上，验收会拦下）')
+  }
   log('data', 'ships no data/ (DSH_HOME is created by the app on first run)')
 
   log('7/7', 'archiving')
