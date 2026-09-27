@@ -556,6 +556,17 @@ jobs:
         shell: pwsh
         run: node _build_repo/tests/patch-session-lock.test.mjs
 
+      # ACL 控制台修复的源码补丁由 build-desktop.mjs 打，所以这里也跑它的套件；
+      # 源码那半要靠 DSH_DESKTOP_SOURCE 指到 workspace 根的上游检出，否则整段静默跳过。
+      - name: Run windows-acl console patch tests
+        shell: pwsh
+        env:
+          DSH_DESKTOP_SOURCE: ${{ github.workspace }}
+        run: node _build_repo/tests/patch-windows-acl-runner-console.test.mjs
+      - name: Run windows-acl console repair tests
+        shell: pwsh
+        run: node _build_repo/tests/repair-windows-acl-runner-console.test.mjs
+
       # 编译清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
       - name: Compile updater
         shell: pwsh
