@@ -111,6 +111,20 @@ function main() {
     problems.push(`FAIL session lock surface — ${error instanceof Error ? error.message : String(error)}`)
   }
 
+  // 源码补丁（patch-windows-acl-runner-console）：受限子进程与 runner 共享控制台，而 Electron 是
+  // GUI 子系统、永远不持有控制台 → runner 必须自备一个，否则桌面端每条受限命令都在 DLL 初始化
+  // 阶段以 0xC0000142 静默死亡。这里断言它确实编译进了打包产物。
+  const aclRunnerEntry = 'dsh/node_modules/@deepseek-ai/dsh-sandbox-windows-acl/lib/runner.js'
+  try {
+    const aclRunnerSource = existsSync(join(unpackedRoot, aclRunnerEntry))
+      ? readFileSync(join(unpackedRoot, aclRunnerEntry), 'utf8')
+      : readAsarFile(readFileSync(asarPath), aclRunnerEntry).toString('utf8')
+    check(aclRunnerSource.includes('ensureSharedConsole'), 'runtime: windows-acl runner acquires a shared console')
+    check(aclRunnerSource.includes('STATUS_DLL_INIT_FAILED'), 'runtime: 0xC0000142 classified as a runner failure')
+  } catch (error) {
+    problems.push(`FAIL windows-acl runner surface — ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   // 便携引导：打包进 asar 的 main.js 必须带我们的 bootstrap
   try {
     const mainSource = readAsarFile(readFileSync(asarPath), 'lib/main.js').toString('utf8')
