@@ -124,6 +124,9 @@ function main() {
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-runtime-patch.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-computer-use.mjs'), SOURCE])
+  // browser-use 是纯 JS 族（无原生模块）：声明注册表 + 运行时 + 选定提供方（chrome-devtools-mcp）
+  // 与提供方自己的 registry 依赖。少了这一步，profile 的插件行会被加载器判为未安装、整套静默消失。
+  run('patch', process.execPath, [join(HERE, 'patch-desktop-browser-use.mjs'), SOURCE])
   // AclSandbox 用 creationFlags 0 起受限子进程，于是子进程挂在**跑 runner 的那个进程**的控制台上；
   // Electron 是 GUI 子系统、永远不持有控制台 → 桌面端每条受限命令都在 DLL 初始化阶段以 0xC0000142
   // 静默死亡。修在源码阶段，由 build:official 编译进产物。

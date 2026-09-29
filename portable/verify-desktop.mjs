@@ -5,7 +5,8 @@
 //   2. 无更新来源：resources 下不得有 app-update.yml；asar 内 package.json 不得含 dshMandatoryUpdatePolicy
 //   3. 迁移器：resources/dsh-build/migrate-sessions-v4.mjs 存在
 //   4. 补丁在产物里：运行时段 tarball 内 dsh-workflow-ptc/lib/index.js 可解析、白名单含 instruction-hint
-//   5. 数据面：产物不含 data/
+//   5. 插件面：computer-use / browser-use 的包在运行时段 dsh/node_modules 里，原生二进制已 unpack
+//   6. 数据面：产物不含 data/
 //
 // 用法: node verify-desktop.mjs [--dir <staged package>]
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -14,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 // 平台原生包名带工具链后缀（-msvc / -gnu），共用补丁脚本里的词表匹配，免得两处各写一套
 import { matchesPlatformName } from './patch-desktop-computer-use.mjs'
+// browser-use 那族要断言的包名同样从补丁脚本取（换提供方时只改补丁脚本的 PROVIDER 一处）
+import { RUNTIME_PACKAGES as BROWSER_USE_PACKAGES } from './patch-desktop-browser-use.mjs'
 // asar 格式与重打包工具共用同一份实现（头部 pickle / 数据区起点 / 块间无对齐填充）
 import { parseAsarBuffer, readAsarFile, walkAsarEntries } from './asar-format.mjs'
 
@@ -84,8 +87,10 @@ function main() {
       check(source.includes('replace(/\\\\s+/g, \\" \\")'), 'runtime: guest source guard patched (escaped inside the literal)')
     } else {
       // 补丁 2：v2->v3 的 SOURCE_KINDS 白名单必须含历史 kind
+      // 引号两侧皆认（["']）：断言的是不变式（白名单里有这两个 kind），不钉死引号形态。
       const kinds = /SOURCE_KINDS = new Set\(\[([\s\S]{0,400}?)\]\)/.exec(source)
-      check(kinds !== null && kinds[1].includes('"user"') && kinds[1].includes('"instruction-hint"'), 'runtime: whitelist reads user + instruction-hint')
+      const kindsHas = (name) => kinds !== null && new RegExp('["\']' + name + '["\']').test(kinds[1])
+      check(kindsHas('user') && kindsHas('instruction-hint'), 'runtime: whitelist reads user + instruction-hint')
     }
   }
   // P4：会话写锁名必须由 canonical 路径派生，否则经软链/联接点到达的同一文件会有两把锁。
@@ -195,6 +200,41 @@ function main() {
       ubjsText === '' ? 'app.asar.unpacked 里没有 resolve-lib.js（@ubjs 没整树解出来？）' : '没打上补丁 → 原生库会以 os error 126 失败')
   } catch (error) {
     problems.push(`FAIL computer-use surface — ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // browser-use：注册表 + 运行时 + 选定提供方必须在**运行时那棵树**（dsh/node_modules）里 ——
+  // 理由同 computer-use（profile 的插件行在 dsh/ 里解析；声明落在 asar 根那棵会让行找不到包、
+  // 静默不加载）。这一族全是纯 JS，没有原生模块，所以不需要 unpack 与原生库路径断言。
+  try {
+    const buffer = readFileSync(asarPath)
+    const { header } = parseAsarBuffer(buffer)
+    const asarPaths = walkAsarEntries(header).map(({ path }) => path)
+    const runtimePaths = asarPaths.filter((path) => path.startsWith('dsh/node_modules/'))
+    const requireInRuntime = (suffix, label) => {
+      const inRuntime = runtimePaths.some((path) => path.endsWith(suffix))
+      const elsewhere = asarPaths.filter((path) => path.endsWith(suffix) && !path.startsWith('dsh/node_modules/'))
+      check(inRuntime, 'browser-use: ' + label + ' in 运行时树 dsh/node_modules',
+        elsewhere.length > 0 ? '只出现在别处（' + elsewhere[0] + '）→ 插件行解析不到' : '两棵树里都没有')
+    }
+    for (const name of BROWSER_USE_PACKAGES) requireInRuntime(name + '/package.json', name)
+
+    // 提供方自己的 registry 依赖（chrome-devtools-mcp 之类）也得在树里，否则提供方激活时 import
+    // 失败。从产物里那份提供方清单读出来逐个断言 —— 换提供方时这里不用改。
+    const provider = BROWSER_USE_PACKAGES[BROWSER_USE_PACKAGES.length - 1]
+    const providerEntry = 'dsh/node_modules/' + provider + '/package.json'
+    if (!asarPaths.includes(providerEntry)) {
+      problems.push('FAIL browser-use: 读不到产物里 ' + provider + ' 的清单，无法核对它的 registry 依赖')
+    } else {
+      const declared = JSON.parse(readAsarFile(buffer, providerEntry).toString('utf8'))
+      const deps = Object.keys({ ...declared.dependencies, ...declared.optionalDependencies })
+        .filter((name) => !name.startsWith('@deepseek-ai/'))
+      if (deps.length === 0) {
+        notes.push('skip browser-use: ' + provider + ' 没有 registry 依赖')
+      }
+      for (const name of deps) requireInRuntime(name + '/package.json', provider + ' 的依赖 ' + name)
+    }
+  } catch (error) {
+    problems.push(`FAIL browser-use surface — ${error instanceof Error ? error.message : String(error)}`)
   }
 
   check(!existsSync(join(stage, 'data')), 'ships no data/ (DSH_HOME is created on first run)')

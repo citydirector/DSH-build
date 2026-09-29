@@ -11,6 +11,7 @@ import { patchDesktopUpdate, isPatched as updatePatched, EDITS } from '../portab
 import { patchDesktopPortable } from '../portable/patch-desktop-portable.mjs'
 import { patchDesktopToolchain, EDITS as TOOLCHAIN_EDITS } from '../portable/patch-desktop-toolchain.mjs'
 import { patchDesktopComputerUse, patchAsarUnpack, patchUbjsFile, patchUbjsLibPath, RUNTIME_PACKAGES } from '../portable/patch-desktop-computer-use.mjs'
+import { patchDesktopBrowserUse, RUNTIME_PACKAGES as BROWSER_USE_PACKAGES } from '../portable/patch-desktop-browser-use.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const files = resolve(HERE, '..', 'portable', 'desktop-files')
@@ -424,6 +425,67 @@ test('computer-use 补丁：行为测试 —— 打过补丁的 resolveLibPath �
     })
     assert.ok(got.includes('app.asar.unpacked'), '必须映射到 asar 外的真实文件；实际=' + got)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('browser-use 补丁：声明注册表 + 运行时 + 提供方 + 提供方的 registry 依赖、幂等、缺件必须报错', () => {
+  /** 造一棵「@deepseek-ai/dsh 本体 + 三份清单 + 提供方 → chrome-devtools-mcp」的假树。 */
+  const makeTree = () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-bu-'))
+    const write = (rel, value) => {
+      const path = join(root, rel)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
+    }
+    write('packages/dsh/package.json', { name: '@deepseek-ai/dsh', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.0.0' } })
+    write('apps/desktop/package.json', { name: '@deepseek-ai/dsh-desktop', dependencies: {} })
+    write('apps/desktop-host/package.json', {
+      name: '@deepseek-ai/dsh-desktop',
+      version: '0.0.0',
+      dependencies: { '@deepseek-ai/dsh-app-boot': 'workspace:*' },
+    })
+    const provider = 'packages/experimental/browser-use-chrome-devtools-mcp'
+    write(`${provider}/package.json`, {
+      name: '@deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp',
+      version: '0.2.0-rc.2',
+      dependencies: { 'chrome-devtools-mcp': '1.9.0', '@deepseek-ai/dsh-experimental-browser-use-runtime': 'workspace:*' },
+    })
+    // 真实形状：提供方把 registry 依赖装在自己的 node_modules 下（pnpm isolated 布局）
+    write(`${provider}/node_modules/chrome-devtools-mcp/package.json`, { name: 'chrome-devtools-mcp', version: '1.9.0', main: 'index.js' })
+    return root
+  }
+
+  const root = makeTree()
+  try {
+    const expected = [...BROWSER_USE_PACKAGES, 'chrome-devtools-mcp']
+    const first = patchDesktopBrowserUse(root)
+    assert.deepEqual([...first.added['apps/desktop-host/package.json']].sort(), [...expected].sort())
+    assert.deepEqual([...first.added['apps/desktop/package.json']].sort(), [...expected].sort())
+    assert.deepEqual([...first.added['packages/dsh/package.json']].sort(), [...expected].sort(),
+      '@deepseek-ai/dsh 本体那份才是可解析名单的来源，必须声明')
+    const written = JSON.parse(readFileSync(join(root, 'apps/desktop-host/package.json'), 'utf8'))
+    for (const name of BROWSER_USE_PACKAGES) assert.equal(written.dependencies[name], 'workspace:*')
+    assert.equal(written.dependencies['chrome-devtools-mcp'], '1.9.0', '提供方的 registry 依赖按已安装清单的精确版本声明')
+    assert.equal(written.dependencies['@deepseek-ai/dsh-app-boot'], 'workspace:*', '不能动原有依赖')
+    assert.ok(!('devDependencies' in written), '只写 dependencies，不碰 devDependencies')
+    assert.ok(Object.values(patchDesktopBrowserUse(root).added).every((list) => list.length === 0), '第二次必须无改动（幂等）')
+    // 上游改了结构时必须报错，而不是静默加不上、最后打出一个插件行解析不到的包
+    writeFileSync(join(root, 'apps/desktop-host/package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-desktop' }, null, 2) + '\n')
+    assert.throws(() => patchDesktopBrowserUse(root), /dependencies/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+
+  // 提供方的 registry 依赖没装进构建树也必须报错（提供方激活时 import 会失败）
+  const missing = makeTree()
+  try {
+    rmSync(join(missing, 'packages/experimental/browser-use-chrome-devtools-mcp/node_modules'), { recursive: true, force: true })
+    assert.throws(() => patchDesktopBrowserUse(missing), /chrome-devtools-mcp/)
+  } finally { rmSync(missing, { recursive: true, force: true }) }
+
+  // 上游把提供方挪走也必须报错
+  const moved = makeTree()
+  try {
+    rmSync(join(moved, 'packages/experimental/browser-use-chrome-devtools-mcp'), { recursive: true, force: true })
+    assert.throws(() => patchDesktopBrowserUse(moved), /提供方目录/)
+  } finally { rmSync(moved, { recursive: true, force: true }) }
 })
 
 let failed = 0
