@@ -70,8 +70,15 @@ function main() {
       continue
     }
     if (name === 'dsh-util-values') {
-      // 补丁 1 的源码层形态：明文正则
-      check(source.includes('replace(/\\s+/g, " ")'), 'runtime: native-code guard patched (source form)')
+      // 补丁 1 的源码层形态：明文正则。
+      // 上游可能自行修好（改为两次 Function.prototype.toString 互比），此时文件里
+      // 既无 '[native code]' 也无补丁标记 —— 属"不需要补丁"，不是失败。
+      // 不变式：只要还带 '[native code]' 特征，就必须已经带上补丁标记。
+      if (source.includes('[native code]')) {
+        check(source.includes('replace(/\\s+/g, " ")'), 'runtime: native-code guard patched (source form)')
+      } else {
+        notes.push('skip runtime: native-code guard — 上游已无 [native code] 特征，补丁 1 不再适用')
+      }
     } else if (name === 'dsh-workflow-ptc') {
       // 补丁 1 在 guest 源里的形态：位于字符串字面量内，转义成 \\s+ 与 \" \"
       check(source.includes('replace(/\\\\s+/g, \\" \\")'), 'runtime: guest source guard patched (escaped inside the literal)')
