@@ -37,7 +37,8 @@ const NATIVE_PATTERNS = [
 // 那是一个匹配字面量 "[[<空白><非空白>]]" 的正则，对真实代码永远为 false —— 于是「已打过补丁」
 // 判定失效、补丁 2 不再幂等（对已打补丁的文件再插一行），unmatched 安全网也一起哑掉。
 // tests/patch-native-code.test.mjs 场景 4 现在会拦住这类回归。
-export const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}?"instruction-hint"/;
+// 引号两侧皆认（["']）：上游源码是单引号、打包产物是双引号，两种注入形态都要能被认回来。
+export const ALREADY_SOURCE_KINDS = /SOURCE_KINDS\s*=\s*new Set\(\[[\s\S]{0,400}?["']instruction-hint["']/;
 
 /**
  * 该偏移是否位于一个 JS 字符串/模板字面量内部（只扫描注释、引号与反斜杠转义）。
@@ -109,12 +110,24 @@ function patchNative(raw) {
   return { out, patched, already, brokenRepaired, literal, reverted: false };
 }
 
-/** 补丁 2：往 v2→v3 的白名单补 "instruction-hint"，打通 v2→v3→v4 整条链（详见文件头）。 */
+/** 补丁 2：往 v2→v3 的白名单补 "instruction-hint"，打通 v2→v3→v4 整条链（详见文件头）。
+ *
+ * 两种形态都要认，否则会出假警报（unmatched 安全网对着一份打不到的中间产物一直喊）：
+ *   1. 上游源码 / tsc 中间产物：单行、单引号 —— `new Set(['user', 'plugin', …])`（tsc 不改写排版）
+ *   2. tsdown 打包产物（运行时真正加载的那份）：多行、双引号 —— `new Set(\n\t"user",\n…`
+ * 不能改成"跳过 lib/types/**"来消警：`@deepseek-ai/dsh-browser-use` 的 exports 里
+ * `"./brand"` → `"./lib/types/brand.js"` 是**活**子路径，缩窄扫描集会真的漏打。 */
 function patchSourceKinds(raw) {
   if (ALREADY_SOURCE_KINDS.test(raw)) return raw;
-  const re = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*\n(\s*)"user",)/;
-  if (!re.test(raw)) return raw;
-  return raw.replace(re, (_m, head, indent) => head + '\n' + indent + '"instruction-hint",');
+  // 形态 1：单行、单引号（插回单引号、保持单行）
+  const single = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*)('user',\s*)/;
+  if (single.test(raw)) {
+    return raw.replace(single, (_m, head, anchor) => head + anchor + "'instruction-hint', ");
+  }
+  // 形态 2：多行、双引号
+  const multi = /(SOURCE_KINDS\s*=\s*new Set\(\[\s*\n(\s*)"user",)/;
+  if (!multi.test(raw)) return raw;
+  return raw.replace(multi, (_m, head, indent) => head + '\n' + indent + '"instruction-hint",');
 }
 
 export async function* walk(dir) {

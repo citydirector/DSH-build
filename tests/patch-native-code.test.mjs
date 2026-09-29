@@ -7,6 +7,7 @@
 //   4) 幂等：第二次运行零改动
 //   5) 仅注释里提到 '[native code]' 的第三方文件：不动它
 //   6) 补丁 2（SOURCE_KINDS 白名单）：首轮插入一次，次轮判为已打补丁且零改动
+//   7) 补丁 2 的单行形态（上游源码 / tsc 中间产物，单引号）：同样插入一次、次轮幂等
 // 用独立 fixture 构造（script 形态，便于用 vm.Script 直接校验），不依赖真实上游产物；可在 CI 里跑。
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -174,6 +175,40 @@ async function fixture(files) {
   ok((again.match(/"instruction-hint"/g) || []).length === 1, '场景4: 重复运行不会重复插入');
   ok(r2.out.includes('source-kinds(patched=0 already=1)'), '场景4: 次轮报告 source-kinds patched=0 already=1');
   ok(!r2.out.includes('unmatched=1'), '场景4: 次轮没有未识别告警');
+  await rm(f, { recursive: true, force: true });
+}
+
+// ---- 场景 5：补丁 2 的单行形态（上游源码 / tsc 中间产物，单引号）----
+// 上游 payload.ts:10 的白名单是单行 + 单引号，tsc 不改写排版，原样吐到 lib/types/payload.js。
+// 旧匹配器只认多行双引号 → 该文件永远 unmatched（假警报）。这一场景钉住两种形态都被认下、
+// 且单引号形态也幂等（ALREADY_SOURCE_KINDS 必须同时认 ["']）。
+{
+  const singleLine = [
+    "const SOURCE_KINDS = new Set(['user', 'plugin', 'model']);",
+    'function assertClassified(source) {',
+    '  if (!SOURCE_KINDS.has(source.kind)) throw new Error("cannot safely transform unclassified message source");',
+    '}',
+    ''
+  ].join(NL);
+  const f = await fixture({ 'payload.js': singleLine });
+
+  const r = await runScript(f);
+  ok(r.code === 0, '场景5: 运行成功 (exit 0)');
+  const patched = await readFile(join(f, 'payload.js'), 'utf8');
+  ok(patched.includes("'instruction-hint'"), '场景5: 单行白名单补入 instruction-hint');
+  ok((patched.match(/'instruction-hint'/g) || []).length === 1, '场景5: 只插入一次');
+  ok(patched.indexOf("'instruction-hint'") > patched.indexOf("'user'"), '场景5: 插在 user 之后');
+  ok(parsesAsScript(patched), '场景5: 产物可解析');
+  ok(r.out.includes('source-kinds(patched=1 already=0)'), '场景5: 首轮报告 source-kinds patched=1 already=0');
+  ok(!r.out.includes('unmatched=1'), '场景5: 首轮没有未识别告警');
+
+  const r2 = await runScript(f);
+  const again = await readFile(join(f, 'payload.js'), 'utf8');
+  ok(r2.code === 0, '场景5: 第二次运行成功 (exit 0)');
+  ok(again === patched, '场景5: 第二次运行零改动（幂等）');
+  ok((again.match(/'instruction-hint'/g) || []).length === 1, '场景5: 重复运行不会重复插入');
+  ok(r2.out.includes('source-kinds(patched=0 already=1)'), '场景5: 次轮报告 source-kinds patched=0 already=1');
+  ok(!r2.out.includes('unmatched=1'), '场景5: 次轮没有未识别告警');
   await rm(f, { recursive: true, force: true });
 }
 
