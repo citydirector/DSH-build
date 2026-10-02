@@ -2,7 +2,7 @@
 //
 // 产物 dsh-desktop-win64-<short>.zip：整棵 Electron 目录 + 便携引导 + 更新清单（便携版则出
 // app/ + node/ + dsh.exe + update.exe）。
-// 步骤顺序别调换：源码补丁 → 构建 → P1 打在**已构建的 lib** → 迁移器 → 打包（禁止内部重建）
+// 步骤顺序别调换：源码补丁 → 构建 → P1/P2 打在**已构建的 lib** → 迁移器 → 打包（禁止内部重建）
 // → 组装绿色包 → 压缩 + 自验收。上游打包流程内部会重跑 build:official 覆盖 P1，故必须带
 // DSH_DESKTOP_SKIP_INTERNAL_BUILD=1。
 //
@@ -149,6 +149,12 @@ function main() {
   // P1 必须写在运行时段打包成 tarball 之前，且必须在构建之后。
   log('3/7', 'P1: patching built lib files (native-code guard + v2->v3 whitelist)')
   run('P1', process.execPath, [join(HERE, 'patch-native-code.mjs'), SOURCE])
+  // P2 与 P1 同理，必须落在打包前的已构建 lib 上：MCP 工具的 JSON Schema 由
+  // createMcpToolDefinition 逐字透传，原生 cua driver 目录里的 verify_state 带一个布尔
+  // enum（exists: [true]），只认字符串枚举的路由（8787 反代 / Gemini function declaration）
+  // 会因此把整条请求打回一句通用 400。摘掉非字符串 enum 即闭合。
+  log('3a/7', 'P2: stripping non-string enums from MCP tool schemas')
+  run('P2', process.execPath, [join(HERE, 'patch-tool-schema.mjs'), SOURCE])
   // P4 改的是 session-persistence 的锁名派生，必须与 P1 一样落在打包前的已构建 lib 上。
   log('3c/7', 'P4: hashing the canonical path into the Windows session lock name')
   run('P4', process.execPath, [join(HERE, 'patch-session-lock.mjs'), SOURCE])

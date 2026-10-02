@@ -250,6 +250,10 @@ jobs:
       - name: Run patch-session-lock tests
         shell: pwsh
         run: node _build_repo/tests/patch-session-lock.test.mjs
+      # 跑 patch-tool-schema 单测（注入 / 幂等 / 自愈 / unmatched 安全网 + 助手的运行时语义）
+      - name: Run patch-tool-schema tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-tool-schema.test.mjs
 
       # 哨兵：把 workspace 里**精确版本**钉法的 peer 列出来（note 级，永远不拦构建）。
       # 上游的插件 peer 是精确版本，兼容门禁又只校验 @deepseek-ai/dsh* 那几条 —— 精确钉版
@@ -405,11 +409,16 @@ jobs:
       # 2. session v2→v3 迁移白名单缺历史 kind "instruction-hint"，
       #    含旧 AGENTS.md 提示消息的会话迁移报错、无法加载 → 补入白名单。
       #    这条同时是 v4 批量迁移能 0 拒绝的前提。
-      - name: Apply local harness fixes (lossless-JSON guard + v3 migration kind)
+      # 3. MCP 工具的 JSON Schema 由 createMcpToolDefinition 逐字交给模型路由；原生 cua driver
+      #    目录里的 verify_state 带一个布尔 enum（exists: [true]），而只认字符串枚举的路由
+      #    （8787 反代 / Gemini function declaration）会因此把**整条请求**打回一句通用 400 ——
+      #    只要该工具在表里，该路由每次请求都失败。摘掉非字符串 enum 即闭合。
+      - name: Apply local harness fixes (lossless-JSON guard + v3 migration kind + tool-schema enums)
         shell: pwsh
         run: |
           node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
           node _build_repo\portable\patch-session-lock.mjs portable\app\node_modules\@deepseek-ai
+          node _build_repo\portable\patch-tool-schema.mjs portable\app\node_modules\@deepseek-ai
 
       # 迁移器装载校验：--help 之前会先解析全部 import。这一步专门验证迁移器的 external
       # 依赖（cordis / dsh-session / format-catalog / persistence-jsonl …）确实落在
@@ -594,6 +603,9 @@ jobs:
       - name: Run patch-session-lock tests
         shell: pwsh
         run: node _build_repo/tests/patch-session-lock.test.mjs
+      - name: Run patch-tool-schema tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-tool-schema.test.mjs
 
       # ACL 控制台修复的源码补丁由 build-desktop.mjs 打，所以这里也跑它的套件；
       # 源码那半要靠 DSH_DESKTOP_SOURCE 指到 workspace 根的上游检出，否则整段静默跳过。
