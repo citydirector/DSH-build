@@ -9,8 +9,8 @@ import { basename, dirname, join, resolve } from 'node:path'
 
 const PKG = 'dsh-session-persistence-jsonl'
 const MARKER = 'dsh-session-lock-${'
-const UNPATCHED = 'update(resolve(path).toLowerCase()).digest("hex")'
-const PATCHED = 'update((await canonicalLockPath(path)).toLowerCase()).digest("hex")'
+// 引号无关：上游源码用单引号、esbuild 产物用双引号，两处都得命中（旧版写死双引号，换个引号就炸）。
+const UNPATCHED = /update\(\s*resolve\(path\)\.toLowerCase\(\)\s*\)\.digest\((['"])hex\1\)/
 const ANCHOR = 'async function acquireLockHandleWin32(path) {'
 const HELPER = [
   '/** Reparse-point-resolved lock path; the lexical spelling when the directory is not there yet. */',
@@ -39,14 +39,16 @@ function patchFile(file) {
   const source = readFileSync(file, 'utf8')
   if (source.includes('canonicalLockPath')) return 'already'
   if (!source.includes(MARKER)) return 'absent'
-  if (!source.includes(UNPATCHED)) {
+  const unpatched = UNPATCHED.exec(source)
+  if (unpatched === null) {
     throw new Error('session lock surface changed upstream --- review ' + file)
   }
   if (!source.includes(ANCHOR)) {
     throw new Error('session lock helper anchor missing --- review ' + file)
   }
   const patched = source
-    .replace(UNPATCHED, PATCHED)
+    // 只替换 `resolve(path)` 这一段，保留上游自己的引号风格。
+    .replace(UNPATCHED, unpatched[0].replace('resolve(path)', '(await canonicalLockPath(path))'))
     .replace(ANCHOR, HELPER + ANCHOR)
   writeFileSync(file, patched)
   return 'patched'

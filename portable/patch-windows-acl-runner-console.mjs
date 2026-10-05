@@ -4,10 +4,17 @@
 // 与 P1/P4（打在已构建 lib 上）不同，这里打的是 `packages/sandbox/sandbox-windows-acl/src/`，
 // 因此不需要碰压缩后的 lib、也不需要重打包 app.asar —— 打包器打进去的就是已修好的代码。
 //
-// Why: `AclSandbox` 用 `CreateProcessAsUserW(token, …, creationFlags = 0, …)` 起受限子进程
-// （见 `spawn.ts` → `@deepseek-ai/dsh-win32-process` 的 `createRestrictedProcess(..., 0, ...)`），
-// `creationFlags = 0` 表示子进程**直接挂到「跑 runner 的那个进程」的控制台**上。于是判别的不是
-// 父进程有没有控制台，而是 **runner 自己有没有**：
+// Why: `AclSandbox` 用 `CreateProcessAsUserW(token, …, creationFlags, …)` 起受限子进程
+// （见 `spawn.ts` → `@deepseek-ai/dsh-win32-process` 的 `createRestrictedProcess(..., flags, ...)`）。
+// 注（2026-10-04 复核，此前写作「creationFlags = 0」，不够准确）：flags 不是字面量 0。pin 639ed015 下
+//   • `packages/subprocess/win32-process/src/process.ts` 的 `spawnInheritedJobProcess`（`:532`，ACL 沙箱这条
+//     路）在 `:538-545` 传 `abi.CREATE_SUSPENDED`（`:542`）；
+//   • `spawnCurrentTokenJobProcess`（`:554`）在 `:560-572` 传 `abi.CREATE_SUSPENDED | abi.CREATE_UNICODE_ENVIRONMENT`（`:567`）；
+//   • `abi.ts` 里只有 `CREATE_SUSPENDED = 0x4`（`:16`）与 `CREATE_UNICODE_ENVIRONMENT = 0x400`（`:18`），
+//     **没有** CREATE_NEW_CONSOLE(0x10) / DETACHED_PROCESS(0x8) / CREATE_NO_WINDOW。
+// 这两个位都不影响控制台归属，上游还特意保留控制台继承（`process.ts:454` 的注释：Preserve console
+// inheritance: CREATE_NO_WINDOW can fail restricted-token DLL initialization）⇒ 子进程照样**直接挂到
+// 「跑 runner 的那个进程」的控制台**上。于是判别的不是父进程有没有控制台，而是 **runner 自己有没有**：
 //   - 真 node / console 子系统映像：即使 `CREATE_NO_WINDOW` 也会拿到一个无窗口控制台 → 正常；
 //   - Electron（桌面安装）/ **GUI 子系统映像**：永远没有 → 受限子进程在 DLL 初始化阶段死，
 //     `STATUS_DLL_INIT_FAILED` = 0xC0000142，**stderr 全空**。
@@ -19,7 +26,10 @@
 // asar 内部路径，而普通 `node.exe` 读不了 asar 内部路径（实测 plain node 对该路径 ENOENT，
 // 只有 Electron 的 fs shim 能读）→ runner 连启动都失败，比现状更糟。该思路只在解包安装下成立。
 //
-// 锚点已对 `portable/upstream.pin` = 477b4f420553e8a52c2fbccc464d7561b239c443 逐条校验（各命中 1 次）：
+// 锚点逐条校验（各命中 1 次）；下面这些 ref 下这两份文件的 sha256 完全相同：
+//   • 477b4f420553e8a52c2fbccc464d7561b239c443（旧 pin）
+//   • `portable/upstream.pin` = 639ed015397290b3745d163aafe02ffee4aa3f84（当前 pin）
+//   • `dsh-v0.2.1-alpha.1`（0.2.1 预发布 tag）
 //   packages/sandbox/sandbox-windows-acl/src/runner.ts   sha256 542b77278d974f5f93c2a0b925468e96e52737366ed88df7d118a5af67c2eff0
 //   packages/sandbox/sandbox-windows-acl/src/ffi.ts      sha256 9e90ba38afee21078bfa93c976459a131e8f50fdafd22a8fcf3a3433117b1535
 // 任何一条锚点不再唯一命中都会**大声失败**，绝不静默跳过。
@@ -103,8 +113,10 @@ const TARGETS = [
           + '/**\n'
           + ' * Give this process the console the restricted child has to share.\n'
           + ' *\n'
-          + ' * AclSandbox spawns the child with creationFlags 0, so the child attaches to\n'
-          + ' * whatever console THIS process owns. A console-subsystem image owns one even\n'
+          + ' * AclSandbox spawns the child with CREATE_SUSPENDED (0x4; plus\n'
+          + ' * CREATE_UNICODE_ENVIRONMENT on the current-token path) --- neither flag changes\n'
+          + ' * console attachment --- so the child attaches to whatever console THIS process\n'
+          + ' * owns. A console-subsystem image owns one even\n'
           + ' * under CREATE_NO_WINDOW; a GUI-subsystem image (the packaged Electron shell)\n'
           + ' * owns none, and then every confined command dies inside DLL initialization\n'
           + ' * with STATUS_DLL_INIT_FAILED and an empty stderr, which the seam cannot\n'

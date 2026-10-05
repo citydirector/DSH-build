@@ -4,7 +4,8 @@
 //
 // 背景（dsh 0.1.7-rc.2 实查）：
 //   • 产物 package.json 的 extraMetadata.dshMandatoryUpdatePolicy 由 electron-builder 配置注入，
-//     运行时 main.ts:1232 正是从 manifest 读它 → 有值就建策略对象并周期请求
+//     运行时 apps/desktop/src/main.ts:1288 正是从 manifest 读它
+//     （0.1.7-rc.2 时在 :1232；0.2.0-rc.2 与 0.2.1-alpha.1 实测都在 :1288） → 有值就建策略对象并周期请求
 //     `/api/v0/check_client_update`（服务端 code 40005 → blocking 遮罩）。
 //   • electron-updater feed：unsigned 构建下 publish 已是 null（`unsigned ? undefined : resolveDesktopAutoUpdateConfig(...)`
 //     → `publish: update === undefined ? null : [...]`），产物里不会生成 app-update.yml，因此没有可更新来源。

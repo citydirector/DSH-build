@@ -10,6 +10,11 @@
 //
 // 注意：这不改变上游默认行为，只是让"只出目录"的构建路径可选；安装器/签名路径仍属上游。
 //
+// 已知（有意为之）：`apps/desktop/scripts/package-target.ts` 里还有两处同样的冒烟调用 ——
+//   :481（darwin 且非 directory 分支）与 :491（darwin directory 分支），两处都不带 `--unsigned`。
+// 它们只在 macOS 构建路径上，Windows 目录构建走不到，所以本补丁**只包 else 分支那一处**（:497）。
+// 0.2.0-rc.2 与 0.2.1-alpha.1 的该文件逐字节相同，行号一致。
+//
 // 用法: node patch-desktop-toolchain.mjs <repo-root>
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

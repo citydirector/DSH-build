@@ -24,10 +24,15 @@ function quoted(text) {
   return [...text.matchAll(/["']([^"']+)["']/g)].map((m) => m[1])
 }
 
-/** 抠 `const NAME = [...]` / `const NAME = new Set([...])` 里的字符串。 */
+/**
+ * 抠 `const NAME = [...]` / `const NAME = new Set([...])` 里的字符串。
+ *
+ * 名字与 `=` 之间允许夹类型标注：0.2.1 的退役名单写作
+ * `const RETIRED_BUNDLES: ReadonlySet<string> = new Set([...])`，那一段用 `[^=]*` 吞掉。
+ */
 function extractConst(source, name) {
-  const array = new RegExp(`const ${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`)
-  const set = new RegExp(`const ${name}\\s*=\\s*new Set\\(\\[([\\s\\S]*?)\\]\\)`)
+  const array = new RegExp(`const ${name}\\s*[^=]*=\\s*\\[([\\s\\S]*?)\\]`)
+  const set = new RegExp(`const ${name}\\s*[^=]*=\\s*new Set\\(\\[([\\s\\S]*?)\\]\\)`)
   const m = array.exec(source) ?? set.exec(source)
   return m === null ? null : quoted(m[1])
 }
@@ -66,6 +71,9 @@ function check(appNodeModules, profileDir) {
   const defaults = extractConst(bootSrc, 'DEFAULT_PROFILE_BUNDLES')
   const optional = extractConst(bootSrc, 'OPTIONAL_BUNDLES')
   const builtin = extractConst(clientSrc, 'BUILTIN_PROFILE_BUNDLES')
+  // 0.2.1 起 boot 还带一份退役名单：名单里的 bundle 上游不再随包，加载 profile 时会自动从
+  // `dsh.profile.bundles` 里摘掉（`dropRetiredBundles`）。老 pin 没有这个常量 → 空数组，语义不变。
+  const retired = extractConst(bootSrc, 'RETIRED_BUNDLES') ?? []
   if (defaults === null || optional === null || builtin === null || defaults.length === 0 || optional.length === 0 || builtin.length === 0) {
     console.error('check-bundles: 名单解析失败或为空 —— 上游改了这几行，请人工核对本脚本的正则：')
     console.error(`  DEFAULT_PROFILE_BUNDLES=${JSON.stringify(defaults)}`)
@@ -78,11 +86,18 @@ function check(appNodeModules, profileDir) {
   console.log(`  DEFAULT : ${defaults.join(', ')}`)
   console.log(`  OPTIONAL: ${optional.join(', ')}`)
   console.log(`  BUILTIN : ${builtin.join(', ')}`)
+  if (retired.length > 0) console.log(`  RETIRED : ${retired.join(', ')}  ← 上游已退役，不再要求随包`)
 
   console.log('')
   console.log('随包必须撑住的（DEFAULT ∪ OPTIONAL ∪ BUILTIN）：')
   const advertised = [...new Set([...defaults, ...optional, ...builtin])]
+  const retiredSet = new Set(retired)
   for (const name of advertised) {
+    if (retiredSet.has(name)) {
+      // 上游名单里还留着它、但已退役：不要求随包，只提示（profile 里的同名条目由 boot 自己摘掉）。
+      console.log(`  – ${name}  ← 上游已退役（RETIRED_BUNDLES），不要求随包`)
+      continue
+    }
     const r = locate(name, appNodeModules, profileDir)
     console.log(`  ${r.appOk ? '✓' : '✗'} ${name}${r.appOk ? '' : `  ← ${r.source}`}`)
     if (!r.appOk) problems.push(`${name}（对外宣称可选/内置，但不在 app/node_modules 里）`)
@@ -101,6 +116,10 @@ function check(appNodeModules, profileDir) {
     console.log('')
     console.log(`profile 声明的 bundle（${declared.length} 个）与它们的兜底来源：`)
     for (const name of declared) {
+      if (retiredSet.has(name)) {
+        console.log(`  – ${name}  ← 上游已退役（RETIRED_BUNDLES）：加载 profile 时自动摘掉，不算问题`)
+        continue
+      }
       const r = locate(name, appNodeModules, profileDir)
       const alsoDep = deps.includes(name)
       const suffix = r.source === '随包' && alsoDep ? '（同时是 profile 依赖）' : ''
@@ -155,12 +174,41 @@ function selfTest() {
   console.log('== self-test：缺一个官方可选 bundle，看它是否报错 ==')
   const code = check(nm, profile)
   rmSync(base, { recursive: true, force: true })
-  if (code === 1) {
-    console.log('self-test: ✓ 缺 bundle 时返回 1（不是静默通过）')
-    return 0
+  if (code !== 1) {
+    console.error(`self-test: ✗ 期望返回 1，实际 ${code}`)
+    return 1
   }
-  console.error(`self-test: ✗ 期望返回 1，实际 ${code}`)
-  return 1
+  console.log('self-test: ✓ 缺 bundle 时返回 1（不是静默通过）')
+
+  // 退役 bundle：profile 里还声明着、上游已退役且不随包 —— 必须判成无事（boot 会自己摘掉），
+  // 且退役名单带类型标注（`const RETIRED_BUNDLES: ReadonlySet<string> = new Set([...])`）也要能解析。
+  const base2 = mkdtempSync(join(tmpdir(), 'dsh-bundles-retired-'))
+  const nm2 = join(base2, 'node_modules')
+  const mk2 = (rel, text) => {
+    mkdirSync(join(nm2, rel, '..'), { recursive: true })
+    writeFileSync(join(nm2, rel), text)
+  }
+  mk2(APP_BOOT, 'const DEFAULT_PROFILE_BUNDLES = ["@deepseek-ai/dsh-base"];\nconst OPTIONAL_BUNDLES = [\n\t"@deepseek-ai/dsh-base"\n];\nconst RETIRED_BUNDLES: ReadonlySet<string> = new Set([\n\t"@deepseek-ai/dsh-experimental-schedule-bundle"\n]);\n')
+  mk2(PLUGIN_MANAGER_CLIENT, 'const BUILTIN_PROFILE_BUNDLES = new Set([\n\t"@deepseek-ai/dsh-base"\n]);\n')
+  mk2('@deepseek-ai/dsh-base/package.json', '{"name":"@deepseek-ai/dsh-base","version":"0.0.0"}')
+  const profile2 = join(base2, 'profiles', 'web')
+  mkdirSync(profile2, { recursive: true })
+  writeFileSync(join(profile2, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web',
+    dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-experimental-schedule-bundle'] } },
+  }))
+
+  console.log('')
+  console.log('== self-test：退役 bundle 仍写在 profile 里，看它是否不报错 ==')
+  const retiredCode = check(nm2, profile2)
+  rmSync(base2, { recursive: true, force: true })
+  if (retiredCode !== 0) {
+    console.error(`self-test: ✗ 期望退役 bundle 返回 0，实际 ${retiredCode}`)
+    return 1
+  }
+  console.log('self-test: ✓ 退役 bundle 不再算问题')
+  return 0
 }
 
 const argv = process.argv.slice(2)
