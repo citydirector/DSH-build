@@ -600,6 +600,9 @@ jobs:
       - name: Run desktop patch tests
         shell: pwsh
         run: node _build_repo/tests/patch-desktop.test.mjs
+      - name: Run guest DevTools patch tests
+        shell: pwsh
+        run: node _build_repo/tests/patch-desktop-guest-devtools.test.mjs
       - name: Run patch-session-lock tests
         shell: pwsh
         run: node _build_repo/tests/patch-session-lock.test.mjs
