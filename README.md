@@ -126,6 +126,7 @@ node portable/check-bundles.mjs <安装目录>\app\node_modules
 ## 目录约定
 
 - `portable/`：构建期脚本与补丁；`portable/lib/apply-edits.mjs` 是所有源码补丁共用的「锚点恰好命中一次、幂等」替换原语，新补丁只需声明 `EDITS`。
+- `ci/`：workflow 每一步的逻辑（bash / pwsh / node），workflow 只做编排；脚本头注释写明输入的环境变量，可在本地单独跑。
 - `tools/`：不参与流水线的现场工具（如 `repair-windows-acl-runner-console.mjs`，修已安装的旧版）。
 - `tests/`：每个补丁一份回归测试；`npm test` 一次跑完。
 - 注释里引用上游代码时写函数名 / 符号，不写行号（行号会随上游漂移）。

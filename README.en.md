@@ -68,6 +68,7 @@ node portable/check-bundles.mjs <install>\app\node_modules
 ## Layout
 
 - `portable/`: build scripts and patches. `portable/lib/apply-edits.mjs` is the shared "exactly one anchor, idempotent" replacement primitive; a new patch only declares `EDITS`.
+- `ci/`: the logic behind each workflow step (bash / pwsh / node); the workflow only orchestrates. Each script's header lists the environment variables it reads.
 - `tools/`: field tools outside the pipeline, such as `repair-windows-acl-runner-console.mjs` for already-installed builds.
 - `tests/`: one regression test per patch; `npm test` runs them all.
 - Comments refer to upstream code by symbol name, never by line number.
