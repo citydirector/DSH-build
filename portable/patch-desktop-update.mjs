@@ -23,8 +23,14 @@ export const EDITS = [
   {
     name: 'packaged manifest: no embedded Platform policy',
     file: 'apps/desktop/scripts/electron-builder-config.mjs',
-    from: '      dshMandatoryUpdatePolicy: policy,\n',
-    to: '      // DSH-build: keep this undefined so the runtime never constructs a mandatory-update policy.\n      dshMandatoryUpdatePolicy: undefined,\n',
+    // 上游先后出现过两种写法，按顺序尝试，恰好命中一种且只命中一次才算成功：
+    //   1. 无条件嵌入（≤ 2026-10-07）
+    //   2. 2604a4b 起：policy 为 undefined 时整个键省略（条件展开）
+    from: [
+      '      dshMandatoryUpdatePolicy: policy,\n',
+      '      ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),\n',
+    ],
+    to: '      // DSH-build: never embed dshMandatoryUpdatePolicy so the runtime never constructs a mandatory-update policy.\n',
   },
 ]
 
@@ -38,11 +44,12 @@ export function patchDesktopUpdate(root) {
   for (const edit of EDITS) {
     const path = join(root, edit.file)
     const raw = readFileSync(path, 'utf8')
-    const occurrences = raw.split(edit.from).length - 1
-    if (occurrences !== 1) {
-      throw new Error(`patch-desktop-update: ${edit.name}: expected exactly 1 occurrence in ${edit.file}, found ${occurrences}`)
+    const counts = edit.from.map((from) => raw.split(from).length - 1)
+    const hits = edit.from.filter((_, i) => counts[i] === 1)
+    if (hits.length !== 1 || counts.some((n) => n > 1)) {
+      throw new Error(`patch-desktop-update: ${edit.name}: expected exactly 1 occurrence of one known shape in ${edit.file}, found [${counts.join(', ')}]`)
     }
-    writeFileSync(path, raw.replace(edit.from, edit.to))
+    writeFileSync(path, raw.replace(hits[0], edit.to))
     applied.push(edit.name)
   }
   return { applied }
