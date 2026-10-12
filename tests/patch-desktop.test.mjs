@@ -96,8 +96,10 @@ test('P3 上游条件展开写法（2604a4b 起）同样命中', () => {
     const builder = readFileSync(path, 'utf8')
     assert.ok(!builder.includes('dshMandatoryUpdatePolicy: policy'))
     assert.ok(updatePatched(root))
-    // 与旧写法一致：二次执行因锚点已改而报错，不会叠加
-    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence/)
+    // 二次执行是空操作，不会叠加
+    const once = readFileSync(path, 'utf8')
+    assert.deepEqual(patchDesktopUpdate(root).applied, [])
+    assert.equal(readFileSync(path, 'utf8'), once)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -122,12 +124,15 @@ test('P3 不动运行时（update-coordinator 原样保留）', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('P3 幂等：重复运行不重复改（第二次因已改而抛锚点不匹配）', () => {
+test('P3 幂等：重复运行是空操作（共用 lib/apply-edits.mjs 的规则）', () => {
   const root = makeTree()
   try {
     patchElectronBuilderEmbed(root)
     patchDesktopUpdate(root)
-    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence of one known shape/)
+    const path = join(root, 'apps/desktop/scripts/electron-builder-config.mjs')
+    const once = readFileSync(path, 'utf8')
+    assert.deepEqual(patchDesktopUpdate(root).applied, [])
+    assert.equal(readFileSync(path, 'utf8'), once)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

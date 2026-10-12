@@ -12,6 +12,7 @@
 // 用法: node portable/patch-desktop-runtime-patch.mjs <repo-root>
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { applyEditsToFiles } from './lib/apply-edits.mjs'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -38,17 +39,7 @@ const EDIT = {
  * @returns {{ applied: boolean, driverWritten: boolean }}
  */
 function patchDesktopRuntimePatch(root) {
-  let applied = false
-  const path = join(root, EDIT.file)
-  const raw = readFileSync(path, 'utf8')
-  if (!raw.includes(EDIT.to)) {
-    const occurrences = raw.split(EDIT.from).length - 1
-    if (occurrences !== 1) {
-      throw new Error(`patch-desktop-runtime-patch: ${EDIT.name}: expected exactly 1 occurrence in ${EDIT.file}, found ${occurrences}`)
-    }
-    writeFileSync(path, raw.replace(EDIT.from, EDIT.to))
-    applied = true
-  }
+  const applied = applyEditsToFiles(root, [EDIT], 'patch-desktop-runtime-patch').applied.length > 0
   const source = join(HERE, 'desktop-files', 'refresh-client-build-record.ts')
   const target = join(root, RECORD_DRIVER)
   const body = readFileSync(source, 'utf8')

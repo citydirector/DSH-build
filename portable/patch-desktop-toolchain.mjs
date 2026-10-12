@@ -10,14 +10,13 @@
 //
 // 注意：这不改变上游默认行为，只是让"只出目录"的构建路径可选；安装器/签名路径仍属上游。
 //
-// 已知（有意为之）：`apps/desktop/scripts/package-target.ts` 里还有两处同样的冒烟调用 ——
-//   :481（darwin 且非 directory 分支）与 :491（darwin directory 分支），两处都不带 `--unsigned`。
-// 它们只在 macOS 构建路径上，Windows 目录构建走不到，所以本补丁**只包 else 分支那一处**（:497）。
-// 0.2.0-rc.2 与 0.2.1-alpha.1 的该文件逐字节相同，行号一致。
+// 已知（有意为之）：`apps/desktop/scripts/package-target.ts` 里一共有三处
+// `scripts/smoke-packaged-runtime.ts` 调用：darwin 非 directory 分支、darwin directory 分支（都不带
+// `--unsigned`），以及最后带 `invocation.unsigned ? ['--unsigned']` 的 else 分支。前两处只在 macOS
+// 构建路径上，Windows 目录构建走不到，所以本补丁**只包 else 分支那一处**（锚点即该行全文）。
 //
 // 用法: node patch-desktop-toolchain.mjs <repo-root>
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { applyEditsToFiles } from './lib/apply-edits.mjs'
 
 /** 环境变量：跳过"安装器专用"的准备步骤。 */
 export const SKIP_ENV = 'DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN'
@@ -71,19 +70,7 @@ export const EDITS = [
  * @returns {{ applied: string[] }} 本次写入的编辑名。
  */
 export function patchDesktopToolchain(root) {
-  const applied = []
-  for (const edit of EDITS) {
-    const path = join(root, edit.file)
-    const raw = readFileSync(path, 'utf8')
-    if (raw.includes(edit.to)) continue
-    const occurrences = raw.split(edit.from).length - 1
-    if (occurrences !== 1) {
-      throw new Error(`patch-desktop-toolchain: ${edit.name}: expected exactly 1 occurrence in ${edit.file}, found ${occurrences}`)
-    }
-    writeFileSync(path, raw.replace(edit.from, edit.to))
-    applied.push(edit.name)
-  }
-  return { applied }
+  return applyEditsToFiles(root, EDITS, 'patch-desktop-toolchain')
 }
 
 if (import.meta.main) {

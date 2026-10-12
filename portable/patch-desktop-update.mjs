@@ -4,8 +4,8 @@
 //
 // 背景（dsh 0.1.7-rc.2 实查）：
 //   • 产物 package.json 的 extraMetadata.dshMandatoryUpdatePolicy 由 electron-builder 配置注入，
-//     运行时 apps/desktop/src/main.ts:1288 正是从 manifest 读它
-//     （0.1.7-rc.2 时在 :1232；0.2.0-rc.2 与 0.2.1-alpha.1 实测都在 :1288） → 有值就建策略对象并周期请求
+//     运行时 apps/desktop/src/main.ts 正是从 manifest 读它（搜 `'dshMandatoryUpdatePolicy' in manifest`）
+//     → 有值就建策略对象并周期请求
 //     `/api/v0/check_client_update`（服务端 code 40005 → blocking 遮罩）。
 //   • electron-updater feed：unsigned 构建下 publish 已是 null（`unsigned ? undefined : resolveDesktopAutoUpdateConfig(...)`
 //     → `publish: update === undefined ? null : [...]`），产物里不会生成 app-update.yml，因此没有可更新来源。
@@ -15,8 +15,7 @@
 // 于是：无 feed + manifest 无策略 = 运行时不联网、不遮罩，也不存在"被官方更新覆盖掉补丁"的路径。
 //
 // 用法: node patch-desktop-update.mjs <repo-root>
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { applyEditsToFiles, editsApplied } from './lib/apply-edits.mjs'
 
 /** 一处编辑：manifest 不再嵌入策略对象。 */
 export const EDITS = [
@@ -40,24 +39,12 @@ export const EDITS = [
  * @returns {{ applied: string[] }} 已应用的编辑名。
  */
 export function patchDesktopUpdate(root) {
-  const applied = []
-  for (const edit of EDITS) {
-    const path = join(root, edit.file)
-    const raw = readFileSync(path, 'utf8')
-    const counts = edit.from.map((from) => raw.split(from).length - 1)
-    const hits = edit.from.filter((_, i) => counts[i] === 1)
-    if (hits.length !== 1 || counts.some((n) => n > 1)) {
-      throw new Error(`patch-desktop-update: ${edit.name}: expected exactly 1 occurrence of one known shape in ${edit.file}, found [${counts.join(', ')}]`)
-    }
-    writeFileSync(path, raw.replace(hits[0], edit.to))
-    applied.push(edit.name)
-  }
-  return { applied }
+  return applyEditsToFiles(root, EDITS, 'patch-desktop-update')
 }
 
 /** 幂等检查：所有编辑均已应用。 */
 export function isPatched(root) {
-  return EDITS.every((edit) => readFileSync(join(root, edit.file), 'utf8').includes(edit.to))
+  return editsApplied(root, EDITS)
 }
 
 if (import.meta.main) {

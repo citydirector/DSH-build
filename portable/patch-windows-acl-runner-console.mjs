@@ -6,13 +6,13 @@
 //
 // Why: `AclSandbox` 用 `CreateProcessAsUserW(token, …, creationFlags, …)` 起受限子进程
 // （见 `spawn.ts` → `@deepseek-ai/dsh-win32-process` 的 `createRestrictedProcess(..., flags, ...)`）。
-// 注（2026-10-04 复核，此前写作「creationFlags = 0」，不够准确）：flags 不是字面量 0。pin 639ed015 下
-//   • `packages/subprocess/win32-process/src/process.ts` 的 `spawnInheritedJobProcess`（`:532`，ACL 沙箱这条
-//     路）在 `:538-545` 传 `abi.CREATE_SUSPENDED`（`:542`）；
-//   • `spawnCurrentTokenJobProcess`（`:554`）在 `:560-572` 传 `abi.CREATE_SUSPENDED | abi.CREATE_UNICODE_ENVIRONMENT`（`:567`）；
-//   • `abi.ts` 里只有 `CREATE_SUSPENDED = 0x4`（`:16`）与 `CREATE_UNICODE_ENVIRONMENT = 0x400`（`:18`），
+// 注（2026-10-04 复核，此前写作「creationFlags = 0」，不够准确）：flags 不是字面量 0。
+//   • `packages/subprocess/win32-process/src/process.ts` 的 `spawnInheritedJobProcess`（ACL 沙箱这条路）
+//     传 `abi.CREATE_SUSPENDED`；
+//   • `spawnCurrentTokenJobProcess` 传 `abi.CREATE_SUSPENDED | abi.CREATE_UNICODE_ENVIRONMENT`；
+//   • `abi.ts` 里只有 `CREATE_SUSPENDED = 0x4` 与 `CREATE_UNICODE_ENVIRONMENT = 0x400`，
 //     **没有** CREATE_NEW_CONSOLE(0x10) / DETACHED_PROCESS(0x8) / CREATE_NO_WINDOW。
-// 这两个位都不影响控制台归属，上游还特意保留控制台继承（`process.ts:454` 的注释：Preserve console
+// 这两个位都不影响控制台归属，上游还特意保留控制台继承（`process.ts` 里的注释：Preserve console
 // inheritance: CREATE_NO_WINDOW can fail restricted-token DLL initialization）⇒ 子进程照样**直接挂到
 // 「跑 runner 的那个进程」的控制台**上。于是判别的不是父进程有没有控制台，而是 **runner 自己有没有**：
 //   - 真 node / console 子系统映像：即使 `CREATE_NO_WINDOW` 也会拿到一个无窗口控制台 → 正常；
@@ -38,6 +38,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { applyEditsToText } from './lib/apply-edits.mjs'
 
 /** 目标包在工作区里的目录名与包名不同（见其 package.json 的 repository.directory）。 */
 const PACKAGE_DIR = 'packages/sandbox/sandbox-windows-acl'
@@ -165,15 +166,9 @@ const TARGETS = [
  */
 function patchSource(source, edits, already, label) {
   if (already) return undefined
-  let patched = source
-  for (const edit of edits) {
-    const occurrences = patched.split(edit.from).length - 1
-    if (occurrences !== 1) {
-      throw new Error(`${label}: ${edit.name}: expected exactly 1 occurrence, found ${occurrences} --- the source changed upstream`)
-    }
-    patched = patched.replace(edit.from, edit.to)
-  }
-  return patched
+  // 匹配规则统一由 lib/apply-edits.mjs 提供；这里只补一句上游变动的提示。
+  try { return applyEditsToText(source, edits, label).text }
+  catch (error) { throw new Error(`${error instanceof Error ? error.message : error} --- the source changed upstream`) }
 }
 
 /**

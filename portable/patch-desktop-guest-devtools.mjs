@@ -11,14 +11,14 @@
 // 锚点缺失或命中多次直接抛错：宁可构建失败，也不静默产出一个半补丁的包。
 //
 // 用法: node patch-desktop-guest-devtools.mjs <repo-root>
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { applyEditsToFiles } from './lib/apply-edits.mjs'
 
 export const FILE = 'apps/desktop/src/browser-guests.ts'
 
 export const EDITS = [
   {
     name: 'guest webPreferences: allow DevTools in packaged builds',
+    file: FILE,
     from: '        devTools: !app.isPackaged,\n',
     // 保留对 app 的引用：上游开了 noUnusedLocals，删掉 app.isPackaged 会让 `app` 导入变成未使用而编译失败。
     to: "        // DSH-build: inspect embedded browser pages in packaged builds too; DSH_DESKTOP_GUEST_DEVTOOLS=0 opts out.\n"
@@ -26,6 +26,7 @@ export const EDITS = [
   },
   {
     name: 'guest input: F12 / Ctrl+Shift+I toggles the guest DevTools',
+    file: FILE,
     from: '        lease.releaseInput = attachInput(guest, id)\n',
     to: '        lease.releaseInput = attachInput(guest, id)\n'
       + '        // DSH-build: the window menu toggles only the main webContents; give the guest its own toggle.\n'
@@ -48,20 +49,7 @@ export const EDITS = [
  * @returns {{ applied: string[] }} 本次写入的编辑名。
  */
 export function patchDesktopGuestDevtools(root) {
-  const path = join(root, FILE)
-  let raw = readFileSync(path, 'utf8')
-  const applied = []
-  for (const edit of EDITS) {
-    if (raw.includes(edit.to)) continue
-    const occurrences = raw.split(edit.from).length - 1
-    if (occurrences !== 1) {
-      throw new Error(`patch-desktop-guest-devtools: ${edit.name}: expected exactly 1 occurrence in ${FILE}, found ${occurrences}`)
-    }
-    raw = raw.replace(edit.from, edit.to)
-    applied.push(edit.name)
-  }
-  if (applied.length > 0) writeFileSync(path, raw)
-  return { applied }
+  return applyEditsToFiles(root, EDITS, 'patch-desktop-guest-devtools')
 }
 
 if (import.meta.main) {
