@@ -53,6 +53,8 @@
 **绿色承诺**：不写注册表、不写 C 盘用户目录、不写系统环境变量；所有数据都在程序目录内的 `data/`（DSH_HOME），删目录即彻底卸载。
 
 - **原地更新**：双击 `update.exe`，自动检查并原地覆盖（保留 `data/`；覆盖前备份到 `data/backups/`；`update.exe` 自身一并更新）。更新前先关闭 dsh。
+- **插件随版本更新**：覆盖前用新版运行时检查 profile 里的插件，对新版不兼容的列出可升到的版本（找不到兼容版本时可按 N 取消）；覆盖后经官方 `dsh plugin add` 逐个升级，失败的插件由上游门禁回滚、保持原样。
+- **手动更新插件**：关闭 dsh 后运行 `update.exe --plugins`，把所有插件升到兼容当前版本的最新版；便携版的 `dsh plugin …` 也可直接用（随包带 pnpm）。
 - **会话格式自动迁移（v2/v3 → v4）**：每个 `VERSION` 首次启动跑一次，逐会话「写打开后立即关闭」发布 v4 generation；旧代际文件原样保留（要回滚就删掉新代际文件）。报告在 `data/.migrations/tmp/`；`dsh.exe --migrate-sessions` 可重跑，`DSH_SKIP_SESSION_MIGRATION=1` 可跳过。⚠️ 迁移后旧版构建读不出 v4 会话。
   - 启动器**先自己扫一遍**会话目录（每个会话目录里是否已有目标代际的文件；目标版本从随包的 `@deepseek-ai/dsh-session` 解析 SESSION_FORMAT_VERSION，不写死）：全都已是目标代际就毫秒级跳过——标记文件被清掉也不会白跑一遍，控制台也不再刷「87 行 + 一段 JSON」。解析不出目标版本就照常交给迁移器（失败安全）。扫描只读目录名，不碰会话内容。
 - **更新后自查随包是否撑得住你的 bundle**：profile 的 `dsh.profile.bundles` 与「是否随包」是解耦的，选中但没随包的 bundle 只会在启动时行加载失败。用 `node portable/check-bundles.mjs <安装目录>\app\node_modules [--profile <profile>]`（退出码 `0` 干净 / `1` 有悬空 bundle / `2` 名单解析失败；`--self-test` 自证会报错）。CI 的 portable job 在 boot 冒烟后也会跑。

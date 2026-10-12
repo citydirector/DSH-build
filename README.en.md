@@ -43,6 +43,8 @@ Nothing is written outside the folder: all user data lives in `data/` (`DSH_HOME
 3. Enter your DeepSeek API key on first use.
 
 - **In-place updates**: close dsh and run `update.exe`. `data/` is kept and backed up to `data/backups/`.
+- **Plugins follow updates**: before replacing files, `update.exe` checks your profile plugins against the new runtime and finds a compatible version for each one it would break (press N to cancel if one has none). After the update it upgrades them through the official `dsh plugin add`; a failed upgrade is rolled back by upstream and leaves the plugin as it was.
+- **Update plugins by hand**: close dsh and run `update.exe --plugins` to move every plugin to its newest compatible version. In the portable package `dsh plugin …` also works, since it ships its own pnpm.
 - **Session migration (v2/v3 → v4)** runs once per `VERSION`. Re-run with `dsh.exe --migrate-sessions`, skip with `DSH_SKIP_SESSION_MIGRATION=1`. Older builds cannot read v4 sessions.
 - **Bundle check after updates**: `node portable/check-bundles.mjs <install>\app\node_modules [--profile <name>]` reports bundles your profile selects that the release no longer ships.
 - `VERSION` holds the upstream commit; `GLUE` holds this repo's fingerprint, so fixes that only touch the glue still reach users.

@@ -9,6 +9,13 @@
 //     "expectEntry": "DeepSeek Harness.exe", "zipName": "dsh-desktop.zip" }
 // 没有 update.json 时完全保持原便携版行为（app/node 镜像 + dsh-portable-win64 + releases/latest）。
 // 绿色：不写注册表、不写 C 盘用户目录；一切在程序目录内完成。
+//
+// 插件随版本刷新（新包带 plugin-refresh.mjs 时生效）：
+//   覆盖前：用**新包自己的** node/Electron 跑 `plugin-refresh.mjs check`，列出对新运行时不兼容的插件
+//           及能升到的版本；有插件找不到兼容版本时提示（N 取消，其它键或 10 秒后继续）。
+//   覆盖后：apply-update.cmd 末尾跑 `plugin-refresh.mjs apply`，逐个调用官方
+//           `dsh plugin --profile <p> add <name>@<version>`（上游做兼容门禁，失败自动回滚）。
+//   手动：update.exe --plugins 把所有插件升到兼容当前运行时的最新版本（不检查 dsh 本体更新）。
 
 using System;
 using System.Collections.Generic;
@@ -53,6 +60,8 @@ class DshUpdater
         {
             Console.WriteLine("包身份: " + manifest.Kind + "（资产前缀 " + (manifest.AssetPrefix == "" ? "dsh-portable-win64" : manifest.AssetPrefix) + "）");
         }
+        if (HasArg("--plugins")) return RunPluginMaintenance(baseDir, manifest);
+
         string versionFile = Path.Combine(baseDir, manifest == null ? "VERSION" : manifest.VersionFile);
         string current = File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "";
         // 胶水指纹（本仓库内容摘要，构建期写进包根的 GLUE）。上游提交号相同、胶水不同 = 也有新东西：
@@ -140,6 +149,23 @@ class DshUpdater
             }
         }
 
+        // 插件兼容预检：用新包自己的运行时判定，结果写成计划，覆盖完成后由 apply-update.cmd 执行。
+        string pluginPlan = Path.Combine(updateDir, "plugin-plan.json");
+        if (File.Exists(pluginPlan)) File.Delete(pluginPlan);
+        PluginTool newTool = PluginTool.For(newDir, baseDir, manifest);
+        bool refreshPlugins = false;
+        if (newTool.Available())
+        {
+            int check = newTool.Run(new string[] { "check", "--home", newTool.Home, "--runtime", newTool.Runtime, "--out", pluginPlan });
+            if (check == 3 && !AskContinueWithBlockedPlugins())
+            {
+                Console.WriteLine("已取消更新。");
+                return 1;
+            }
+            refreshPlugins = (check == 0 || check == 3) && File.Exists(pluginPlan);
+            if (!refreshPlugins) Console.WriteLine("插件兼容检查未完成（不影响本次更新），插件将保持原样。");
+        }
+
         if (IsDshRunning(baseDir, manifest))
         {
             Console.Error.WriteLine("检测到 " + (manifest == null ? "dsh" : manifest.Kind) + " 正在运行，请先关闭再执行更新。");
@@ -194,6 +220,15 @@ class DshUpdater
                 sb.AppendLine("copy /y \"" + file + "\" \"" + Path.Combine(baseDir, name) + "\"");
             }
         }
+        if (refreshPlugins)
+        {
+            // 覆盖完成后，用已就位的新运行时按计划升级插件；失败的插件上游已回滚，停一下让用户看到结果。
+            PluginTool installed = PluginTool.For(baseDir, baseDir, manifest);
+            foreach (string line in installed.CmdEnvironment()) sb.AppendLine(line);
+            sb.AppendLine(installed.CmdLine(new string[] { "apply", "--plan", pluginPlan, "--" }, true));
+            sb.AppendLine("if errorlevel 1 pause");
+            sb.AppendLine("del /q \"" + pluginPlan + "\" >nul 2>&1");
+        }
         // 应用成功后清理暂存；脚本中途 exit /b 1 时这几个删除不会执行，new/ 留着便于手动重试。
         sb.AppendLine("del /q \"" + zipPath + "\" >nul 2>&1");
         sb.AppendLine("rmdir /s /q \"" + newDir + "\" >nul 2>&1");
@@ -233,6 +268,178 @@ class DshUpdater
 
         Console.WriteLine("更新已开始，后台正在应用，本窗口即将关闭。");
         return 42;
+    }
+
+    static bool HasArg(string name)
+    {
+        try
+        {
+            foreach (string a in Environment.GetCommandLineArgs())
+            {
+                if (string.Equals(a, name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    // update.exe --plugins：不碰 dsh 本体，只把插件升到兼容当前运行时的最新版本。
+    static int RunPluginMaintenance(string baseDir, PackageManifest manifest)
+    {
+        PluginTool tool = PluginTool.For(baseDir, baseDir, manifest);
+        if (!tool.Available())
+        {
+            Console.Error.WriteLine("当前包不带插件更新工具（缺少 " + tool.Script + "），请先用 update.exe 升到新版本。");
+            return 1;
+        }
+        if (IsDshRunning(baseDir, manifest))
+        {
+            Console.Error.WriteLine("检测到 " + (manifest == null ? "dsh" : manifest.Kind) + " 正在运行，请先关闭再更新插件。");
+            return 1;
+        }
+        string updateDir = Path.Combine(baseDir, "data", ".update");
+        Directory.CreateDirectory(updateDir);
+        string plan = Path.Combine(updateDir, "plugin-plan.json");
+        Console.WriteLine("正在检查插件更新...");
+        int check = tool.Run(new string[] { "check", "--all", "--home", tool.Home, "--runtime", tool.Runtime, "--out", plan });
+        if (check != 0 && check != 3) return 1;
+        int apply = tool.Run(tool.WithCli(new string[] { "apply", "--plan", plan, "--" }));
+        try { File.Delete(plan); } catch { }
+        if (apply == 0) Console.WriteLine("插件检查完成。");
+        return apply == 0 && check == 0 ? 0 : 1;
+    }
+
+    // 有插件找不到兼容新运行时的版本：N 取消更新，其它键或 10 秒后继续（这些插件更新后会被停用）。
+    static bool AskContinueWithBlockedPlugins()
+    {
+        try
+        {
+            Console.WriteLine("按 N 取消更新；其它键或 10 秒后继续更新。");
+            DateTime start = DateTime.UtcNow;
+            int deadline = 10;
+            int last = deadline + 1;
+            while ((DateTime.UtcNow - start).TotalSeconds < deadline)
+            {
+                if (Console.KeyAvailable)
+                {
+                    ConsoleKeyInfo k = Console.ReadKey(true);
+                    Console.WriteLine();
+                    return !(k.KeyChar == 'N' || k.KeyChar == 'n');
+                }
+                int left = deadline - (int)(DateTime.UtcNow - start).TotalSeconds;
+                if (left != last)
+                {
+                    last = left;
+                    Console.Write("\r" + left + " 秒后继续更新...  ");
+                }
+                Thread.Sleep(100);
+            }
+            Console.WriteLine();
+            return true;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    // 定位某棵包树（新包暂存目录或已安装目录）里的插件工具与 dsh CLI。
+    // 便携版：node\node.exe + app\plugin-refresh.mjs；CLI = app\dsh-plugin-cli.mjs（带随包 pnpm）。
+    // 桌面版：以 Electron 作 node（ELECTRON_RUN_AS_NODE=1）+ resources\dsh-build\plugin-refresh.mjs；
+    //         CLI = asar 内 dsh-desktop-host\lib\cli.js（上游桌面版自带 pnpm 的入口）。
+    class PluginTool
+    {
+        public string Executable;
+        public string Script;
+        public string Runtime;
+        public string Home;
+        public bool Electron;
+        public string[] Cli;
+
+        public static PluginTool For(string root, string baseDir, PackageManifest manifest)
+        {
+            PluginTool t = new PluginTool();
+            t.Home = Path.Combine(baseDir, "data");
+            if (manifest == null || manifest.Mirror != ".")
+            {
+                t.Executable = Path.Combine(root, "node", "node.exe");
+                t.Script = Path.Combine(root, "app", "plugin-refresh.mjs");
+                t.Runtime = Path.Combine(root, "app");
+                t.Cli = new string[] { Path.Combine(root, "app", "dsh-plugin-cli.mjs") };
+            }
+            else
+            {
+                t.Electron = true;
+                t.Executable = Path.Combine(root, manifest.ExpectEntry);
+                t.Script = Path.Combine(root, "resources", "dsh-build", "plugin-refresh.mjs");
+                t.Runtime = Path.Combine(root, "resources", "app.asar", "dsh");
+                t.Cli = new string[] { "--expose-internals", Path.Combine(t.Runtime, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js") };
+            }
+            return t;
+        }
+
+        public bool Available()
+        {
+            return File.Exists(Executable) && File.Exists(Script);
+        }
+
+        // apply 的参数：脚本参数之后接「可执行文件 + CLI 前缀」。
+        public string[] WithCli(string[] args)
+        {
+            List<string> all = new List<string>(args);
+            all.Add(Executable);
+            all.AddRange(Cli);
+            return all.ToArray();
+        }
+
+        // 直接在本控制台跑脚本（继承窗口，输出直达用户）；返回退出码，起不来返回 1。
+        public int Run(string[] args)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = Executable;
+                psi.UseShellExecute = false;
+                StringBuilder line = new StringBuilder(Quote(Script));
+                foreach (string a in args) line.Append(' ').Append(Quote(a));
+                psi.Arguments = line.ToString();
+                psi.EnvironmentVariables["DSH_HOME"] = Home;
+                if (Electron) psi.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
+                else psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(Executable) + ";" + Environment.GetEnvironmentVariable("PATH");
+                using (Process p = Process.Start(psi))
+                {
+                    p.WaitForExit();
+                    return p.ExitCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("插件工具启动失败：" + ex.Message);
+                return 1;
+            }
+        }
+
+        // apply-update.cmd 里的环境设置行。
+        public string[] CmdEnvironment()
+        {
+            if (Electron) return new string[] { "set \"DSH_HOME=" + Home + "\"", "set \"ELECTRON_RUN_AS_NODE=1\"" };
+            return new string[] { "set \"DSH_HOME=" + Home + "\"", "set \"PATH=" + Path.GetDirectoryName(Executable) + ";%PATH%\"" };
+        }
+
+        // apply-update.cmd 里的一条命令；withCli 时在参数后接上 CLI。
+        public string CmdLine(string[] args, bool withCli)
+        {
+            string[] all = withCli ? WithCli(args) : args;
+            StringBuilder line = new StringBuilder("\"" + Executable + "\" \"" + Script + "\"");
+            foreach (string a in all) line.Append(" \"").Append(a).Append('"');
+            return line.ToString();
+        }
+
+        // 本工具传的只有路径与固定参数（不含引号、不以反斜杠结尾），按需整体加引号即可。
+        static string Quote(string s)
+        {
+            return s.Length > 0 && s.IndexOfAny(new char[] { ' ', '\t' }) < 0 ? s : "\"" + s + "\"";
+        }
     }
 
     // 选择更新通道：3 秒倒计时默认 main；按 2 选 dev，其余/超时选 main。
