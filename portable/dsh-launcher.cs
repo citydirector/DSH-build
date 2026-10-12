@@ -3,6 +3,7 @@
 //       → 首次以新版本启动时跑一次会话代际迁移（app\migrate-sessions-v4.mjs）→ 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
 // 子命令：--migrate-sessions 只跑会话代际迁移、不启动 dsh（迁移有失败项后的手动重跑入口）。
+//       plugin ...：改走 app\dsh-plugin-cli.mjs，把随包 pnpm 交给上游 CLI（否则要求 PATH 上有 pnpm）。
 
 using System;
 using System.Diagnostics;
@@ -103,7 +104,10 @@ class DshLauncher
         // 无参数自动 web 时传 --no-open：DSH 本体（node）在新版本里也会自动开浏览器，
         // 与启动器的 autoWeb 打开逻辑重复（会开两个窗口）。浏览器只由启动器开一次，
         // 且是在 3080 端口就绪之后。
-        psi.Arguments = Quote(binJs) + (autoWeb ? " web --no-open" : "");
+        // `dsh plugin ...` 需要 pnpm：便携版不在 PATH 上放 pnpm，由插件入口把随包 pnpm 交给上游 CLI。
+        string pluginCli = Path.Combine(baseDir, "app", "dsh-plugin-cli.mjs");
+        string entry = args.Length > 0 && args[0] == "plugin" && File.Exists(pluginCli) ? pluginCli : binJs;
+        psi.Arguments = Quote(entry) + (autoWeb ? " web --no-open" : "");
         foreach (string a in args)
         {
             psi.Arguments += " " + Quote(a);
