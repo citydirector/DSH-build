@@ -49,6 +49,23 @@ function childEnvironment() {
 
 function log(step, message) { console.log('[' + step + '] ' + message) }
 
+/**
+ * 用打包产物自己的 Electron（ELECTRON_RUN_AS_NODE）对空 DSH_HOME 跑一次 plugin-refresh check：
+ * 验证 asar 内 dsh 运行时的路径与 semver 解析。只告警不失败 —— 插件刷新是增强，不能卡住整包发布。
+ */
+function smokePluginRefresh() {
+  const home = join(OUT_ROOT, 'plugin-refresh-smoke')
+  rmSync(home, { recursive: true, force: true })
+  mkdirSync(join(home, 'profiles'), { recursive: true })
+  const result = spawnSync(join(STAGE, PRODUCT_EXE), [
+    join(STAGE, 'resources', 'dsh-build', 'plugin-refresh.mjs'), 'check',
+    '--home', home, '--runtime', join(STAGE, 'resources', 'app.asar', 'dsh'), '--out', join(home, 'plan.json'),
+  ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 60_000 })
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
+  if (result.status === 0) log('assemble', 'plugin-refresh 冒烟通过（asar 运行时可解析）')
+  else log('assemble', `WARN plugin-refresh 冒烟失败（退出码 ${String(result.status)}）：${output || String(result.error)}`)
+}
+
 /** pnpm 的调用方式：CI 上没有 pnpm.exe/.cmd 的扩展名解析，必须经 shell（或直接用 JS 入口）。 */
 function pnpmInvocation(args) {
   const entry = process.env.DSH_DESKTOP_PNPM ?? process.env.npm_execpath
@@ -205,6 +222,9 @@ function main() {
   const builtMigrator = join(OUT_ROOT, 'migrate-sessions-v4.mjs')
   if (existsSync(builtMigrator)) cpSync(builtMigrator, join(migratorTarget, 'migrate-sessions-v4.mjs'))
   else log('assemble', 'WARN migrator missing; the portable bootstrap will skip session migration')
+  // 插件随版本刷新：update.exe 覆盖前后以 Electron 作 node 调用它（见 plugin-refresh.mjs 头注释）。
+  cpSync(join(HERE, 'plugin-refresh.mjs'), join(migratorTarget, 'plugin-refresh.mjs'))
+  smokePluginRefresh()
   const updateExe = resolve(process.env.DSH_DESKTOP_UPDATE_EXE ?? join(HERE, 'update.exe'))
   if (existsSync(updateExe)) cpSync(updateExe, join(STAGE, 'update.exe'))
   else log('assemble', 'WARN update.exe missing; the package ships without the manifest-aware updater')
