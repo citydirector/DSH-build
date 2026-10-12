@@ -77,10 +77,27 @@ test('P3 编辑命中且不动其它', () => {
     const { applied } = patchDesktopUpdate(root)
     assert.equal(applied.length, EDITS.length)
     const builder = readFileSync(join(root, 'apps/desktop/scripts/electron-builder-config.mjs'), 'utf8')
-    assert.ok(builder.includes('dshMandatoryUpdatePolicy: undefined,'))
+    assert.ok(!builder.includes('dshMandatoryUpdatePolicy: policy'))
+    assert.ok(builder.includes(EDITS[0].to))
     const pkgEnv = readFileSync(join(root, 'apps/desktop/scripts/desktop-package-environment.mjs'), 'utf8')
     assert.ok(pkgEnv.includes('resolveDesktopPolicyEnvironment(environment)'))
     assert.ok(updatePatched(root))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('P3 上游条件展开写法（2604a4b 起）同样命中', () => {
+  const root = makeTree()
+  try {
+    patchElectronBuilderEmbed(root)
+    const path = join(root, 'apps/desktop/scripts/electron-builder-config.mjs')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('      dshMandatoryUpdatePolicy: policy,\n',
+      '      ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),\n'))
+    patchDesktopUpdate(root)
+    const builder = readFileSync(path, 'utf8')
+    assert.ok(!builder.includes('dshMandatoryUpdatePolicy: policy'))
+    assert.ok(updatePatched(root))
+    // 与旧写法一致：二次执行因锚点已改而报错，不会叠加
+    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -90,7 +107,7 @@ test('P3 锚点缺失时报错而不是静默跳过', () => {
     patchElectronBuilderEmbed(root)
     mkdirSync(join(root, 'apps/desktop/scripts'), { recursive: true })
     writeFileSync(join(root, 'apps/desktop/scripts/electron-builder-config.mjs'), 'export const x = 1\n')
-    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence/)
+    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence of one known shape/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -110,7 +127,7 @@ test('P3 幂等：重复运行不重复改（第二次因已改而抛锚点不�
   try {
     patchElectronBuilderEmbed(root)
     patchDesktopUpdate(root)
-    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence/)
+    assert.throws(() => patchDesktopUpdate(root), /expected exactly 1 occurrence of one known shape/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
