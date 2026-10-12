@@ -63,3 +63,14 @@ Invoke-Native 'patch-dep' {
     @deepseek-ai/dsh-browser-use @deepseek-ai/dsh-experimental-browser-use-runtime `
     @deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp
 }
+
+# 7. 插件随版本刷新：update.exe 在覆盖前后调用 plugin-refresh.mjs（见脚本头注释）；
+#    dsh-plugin-cli.mjs 是 `dsh plugin ...` 的入口，把随包 pnpm 交给上游 CLI —— 便携版不在 PATH 上放
+#    pnpm，直接跑 lib/bin.js 的插件命令一律 "pnpm was not found"。pnpm 取上游根 devDependency
+#    （与桌面版 primary-runtime 里那份同版本），放 app\vendor 下：更新器只镜像 app/node，放别处不会随更新替换。
+Copy-Item _build_repo\portable\plugin-refresh.mjs portable\app\plugin-refresh.mjs -Force
+Copy-Item _build_repo\portable\dsh-plugin-cli.mjs portable\app\dsh-plugin-cli.mjs -Force
+Invoke-Native 'vendor pnpm' {
+  node -e "const fs=require('node:fs');fs.rmSync('portable/app/vendor/pnpm',{recursive:true,force:true});fs.cpSync(fs.realpathSync('node_modules/pnpm'),'portable/app/vendor/pnpm',{recursive:true,dereference:true})"
+}
+if (-not (Test-Path 'portable\app\vendor\pnpm\bin\pnpm.mjs')) { throw '随包 pnpm 缺少 bin\pnpm.mjs' }
