@@ -1,5 +1,7 @@
 # DSH Build
 
+中文 | [English](README.en.md)
+
 对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 自动拉取、构建并发布的仓库。
 产物在 [Releases](https://github.com/citydirector/DSH-build/releases)：Windows 便携版、Windows 桌面端（绿色便携）、npm tarball 全家桶。
 
@@ -115,7 +117,19 @@ Actions → **Build DSH** → `Run workflow`，`channel` 可选 `auto`（跟随�
 ## 本地构建 / 验收
 
 ```powershell
+npm test                            # 全部补丁单测（node --test "tests/*.test.mjs"）
 node portable/build-desktop.mjs     # 桌面端（另有 --skip-build / --skip-package / --no-verify）
 node portable/verify-desktop.mjs --dir <staged package>
 node portable/check-bundles.mjs <安装目录>\app\node_modules
 ```
+
+## 目录约定
+
+- `portable/`：构建期脚本与补丁；`portable/lib/apply-edits.mjs` 是所有源码补丁共用的「锚点恰好命中一次、幂等」替换原语，新补丁只需声明 `EDITS`。
+- `tools/`：不参与流水线的现场工具（如 `repair-windows-acl-runner-console.mjs`，修已安装的旧版）。
+- `tests/`：每个补丁一份回归测试；`npm test` 一次跑完。
+- 注释里引用上游代码时写函数名 / 符号，不写行号（行号会随上游漂移）。
+
+## 许可证
+
+[MIT](LICENSE)。上游 deepseek-harness 同为 MIT。
