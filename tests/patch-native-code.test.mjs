@@ -179,7 +179,7 @@ async function fixture(files) {
 }
 
 // ---- 场景 5：补丁 2 的单行形态（上游源码 / tsc 中间产物，单引号）----
-// 上游 payload.ts:10 的白名单是单行 + 单引号，tsc 不改写排版，原样吐到 lib/types/payload.js。
+// 上游 payload.ts 的 SOURCE_KINDS 白名单是单行 + 单引号，tsc 不改写排版，原样吐到 lib/types/payload.js。
 // 旧匹配器只认多行双引号 → 该文件永远 unmatched（假警报）。这一场景钉住两种形态都被认下、
 // 且单引号形态也幂等（ALREADY_SOURCE_KINDS 必须同时认 ["']）。
 {

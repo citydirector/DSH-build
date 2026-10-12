@@ -1,7 +1,7 @@
 // asar-format.mjs
 //
 // asar 容器格式的最小共享实现：头部 pickle 的解析/序列化、条目读取与遍历。
-// `verify-desktop.mjs`（校验打包产物）与 `repair-windows-acl-runner-console.mjs`（重打包归档）
+// `verify-desktop.mjs`（校验打包产物）与 `tools/repair-windows-acl-runner-console.mjs`（重打包归档）
 // 读的是同一个格式，放这里单一来源 —— 这个格式（头 pickle 的 8 字节前缀、JSON 长度、
 // 数据区起点、块间**没有**对齐填充）很容易在第二份实现里写错。
 //
