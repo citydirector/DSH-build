@@ -38,13 +38,13 @@
 // the app runs: use --asar while Desktop is closed to rewrite the archive.
 //
 // 用法:
-//   node portable/repair-windows-acl-runner-console.mjs D:\dsh-portable\app
-//   node portable/repair-windows-acl-runner-console.mjs --asar resources\app.asar <staging>\app.asar
+//   node tools/repair-windows-acl-runner-console.mjs D:\dsh-portable\app
+//   node tools/repair-windows-acl-runner-console.mjs --asar resources\app.asar <staging>\app.asar
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // asar 格式与校验脚本共用同一份实现（头部 pickle / 数据区起点 / 块间无对齐填充）
-import { packAsarHeader, parseAsarHeader, walkAsarEntries } from './asar-format.mjs'
+import { packAsarHeader, parseAsarHeader, walkAsarEntries } from '../portable/asar-format.mjs'
 
 /** Marker proving the shared-console helper was injected. */
 const CONSOLE_MARKER = 'ensureSharedConsole'
@@ -147,7 +147,7 @@ const TARGETS = [
           + '$1// dies before its entry point. Reporting the raw code leaves the seam nothing to\n'
           + '$1// match and the tool shows a bare exit status; the signature classifies it.\n'
           + '$1if (exitCode === STATUS_DLL_INIT_FAILED || exitCode === (STATUS_DLL_INIT_FAILED | 0)) {\n'
-          + '$1\tfail("the confined child died during DLL initialization (0xC0000142 STATUS_DLL_INIT_FAILED): the runner has no console to share with it (DSH-build portable/repair-windows-acl-runner-console.mjs).");\n'
+          + '$1\tfail("the confined child died during DLL initialization (0xC0000142 STATUS_DLL_INIT_FAILED): the runner has no console to share with it (DSH-build tools/repair-windows-acl-runner-console.mjs).");\n'
           + '$1}\n'
           + '$1return exitCode;',
       },
@@ -487,7 +487,7 @@ function main() {
   const argv = process.argv.slice(2)
   if (argv[0] === '--asar') {
     if (argv.length !== 3 || argv[1] === undefined || argv[2] === undefined) {
-      console.error('用法: node portable/repair-windows-acl-runner-console.mjs --asar <in.asar> <out.asar>')
+      console.error('用法: node tools/repair-windows-acl-runner-console.mjs --asar <in.asar> <out.asar>')
       process.exit(2)
     }
     const patched = patchAsar(resolve(argv[1]), resolve(argv[2]))
@@ -496,7 +496,7 @@ function main() {
     return
   }
   if (argv.length === 0) {
-    console.error('用法: node portable/repair-windows-acl-runner-console.mjs <tree-root> [<tree-root> ...]')
+    console.error('用法: node tools/repair-windows-acl-runner-console.mjs <tree-root> [<tree-root> ...]')
     process.exit(2)
   }
   let patched = 0

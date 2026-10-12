@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const PATCHER = join(HERE, '..', 'portable', 'repair-windows-acl-runner-console.mjs')
+const PATCHER = join(HERE, '..', 'tools', 'repair-windows-acl-runner-console.mjs')
 const NODE = process.execPath
 
 /** 夹具必须逐字带上真实构建产物里的锚点，否则补丁会（正确地）拒绝改写。 */
