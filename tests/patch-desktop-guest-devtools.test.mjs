@@ -35,8 +35,8 @@ test('applies both edits', () => {
   try {
     assert.equal(patchDesktopGuestDevtools(t.root).applied.length, 2)
     const out = t.read()
-    assert.ok(!out.includes('devTools: !app.isPackaged'))
-    assert.ok(out.includes('devTools: true'))
+    assert.ok(!out.includes('devTools: !app.isPackaged,\n'))
+    assert.ok(out.includes("devTools: !app.isPackaged || process.env.DSH_DESKTOP_GUEST_DEVTOOLS !== '0'"))
     assert.ok(out.includes("guest.on('before-input-event'"))
     assert.ok(out.includes("guest.openDevTools({ mode: 'detach' })"))
     assert.ok(out.indexOf('attachInput(guest, id)') < out.indexOf("guest.on('before-input-event'"))
