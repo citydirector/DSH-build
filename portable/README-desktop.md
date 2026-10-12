@@ -70,6 +70,7 @@ dsh-desktop/
 | `patch-desktop-portable.mjs` | 在 `apps/desktop/src/main.ts` 首行注入便携引导（`desktop-files/dsh-portable-bootstrap.ts`）：DSH_HOME 与 Electron 目录重定向 + 按 VERSION 跑一次会话迁移 |
 | `patch-desktop-toolchain.mjs` | 三处“只服务安装器或深层目录”的步骤加显式开关：VS 预检、NSIS 安装器 UI 准备、打包后冒烟 |
 | `patch-desktop-runtime-patch.mjs` | 禁止打包流程内部重跑 `build:official`（否则会覆盖已经打好的 P1） |
+| `patch-desktop-guest-devtools.mjs` | 内嵌浏览器页（webview guest）在打包版也允许 DevTools，guest 聚焦时 F12 / Ctrl+Shift+I 打开其独立 DevTools 窗口（2 处） |
 
 复用便携版已有的 `portable/patch-native-code.mjs`（P1：native-code 守卫 + v2→v3 白名单），**必须**打在“已构建的 lib”上、且在运行时段打成 tarball 之前。
 
