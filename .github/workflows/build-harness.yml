@@ -5,6 +5,7 @@ name: Build DSH
 # GitHub 的 schedule 只在默认分支触发，因此每日构建天然只走 dev 通道。
 # 跳过判定：自动触发要求「目标上游提交 + 胶水指纹」都相同；手动 dispatch 一律构建。
 # 通道语义、晋升路径、产物与本地补丁详见 README.md。
+# 这里只做编排：每一步的逻辑在 ci/（流水线脚本）与 portable/（构建 / 补丁脚本）里，可在本地单独跑。
 on:
   schedule:
     # 只会在默认分支（dev）上触发 —— 这也是 main 不会自动发稳定版的原因。
@@ -15,6 +16,7 @@ on:
     paths:
       - "portable/**"
       - "tests/**"
+      - "ci/**"
       - ".github/workflows/**"
   # 手动触发一律构建（不跳过）。channel 默认 auto = 跟随分支；
   # 显式选 main 只刷 dsh-master-latest（稳定 tag），选 dev 只刷 dsh-dev-latest（预发布 tag）——
@@ -58,80 +60,26 @@ jobs:
       short_sha: ${{ steps.resolve.outputs.short_sha }}
       glue: ${{ steps.resolve.outputs.glue }}
     steps:
-      # dev 通道要读上游 master 头，所以这里检出的就是上游仓库
+      # dev 通道要读上游 master 头，所以工作目录检出的是上游仓库
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: master
           fetch-depth: 0
-
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          path: _build_repo
+          sparse-checkout: ci
       - name: Resolve target upstream commit
         id: resolve
-        shell: bash
-        run: |
-          channel=dev
-          tag=dsh-dev-latest
-          if [ "${{ github.ref_name }}" = "main" ]; then channel=main; tag=dsh-master-latest; fi
-          # 手动触发可用 inputs.channel 覆盖分支推导（auto 保持上面的结果）
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            case "${{ inputs.channel }}" in
-              main) channel=main; tag=dsh-master-latest ;;
-              dev)  channel=dev;  tag=dsh-dev-latest ;;
-            esac
-          fi
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
-
-          if [ "$channel" = "main" ]; then
-            # 稳定通道：钉在 portable/upstream.pin 上（用 API 读，免得为读一行做一次 checkout）
-            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/portable/upstream.pin?ref=${{ github.sha }}" \
-                   --jq '.content' | base64 -d | tr -d '[:space:]')"
-            if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
-              echo "::error::portable/upstream.pin 不是 40 位 commit sha：'$sha'"
-              exit 1
-            fi
-            if ! gh api "repos/deepseek-ai/deepseek-harness/commits/$sha" >/dev/null 2>&1; then
-              echo "::error::upstream.pin 指向的提交在上游不存在：$sha"
-              exit 1
-            fi
-            echo "🎯 main 通道：目标 = pin $sha"
-          else
-            # dev 通道：跟随上游 master 头
-            sha="$(git rev-parse HEAD)"
-            echo "🎯 dev 通道：目标 = 上游 master 头 $sha"
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
-
-          # 胶水指纹：本仓库内容里**除 pin 之外**的 blob 摘要（用 API 取，不必为算哈希多检出一次）。
-          # 跳过判定必须同时看它 —— 上游提交没动、但胶水改了（补丁脚本、workflow、启动器源码），
-          # 产物是会变的。只看上游的话，这类改动静默地出不了货（实测踩到过：晋升 PR 合进 main
-          # 却没动 pin，于是整轮直接跳过，新胶水一直没进稳定版）。
-          # 排除 pin 是关键：dev 每次发布后都会推进 pin，那不改变产物、不该触发重建。
-          glue="$(gh api "repos/$GITHUB_REPOSITORY/git/trees/${{ github.sha }}?recursive=1" \
-                  --jq '[.tree[] | select(.path != "portable/upstream.pin") | "\(.path):\(.sha)"] | sort | join("\n")' \
-                  | sha256sum | cut -c1-16)"
-          echo "glue=$glue" >> "$GITHUB_OUTPUT"
-          echo "🧬 胶水指纹 = $glue"
-
-          # 跳过判定：手动 dispatch 一律构建；schedule / push 在「目标上游提交相同 **且** 胶水指纹相同」
-          # 时跳过。两个来源都从 Release body 机器可读行读（旧格式缺行 → 不跳过，迁移期安全）。
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "🔨 手动触发：直接构建"
-            exit 0
-          fi
-          body="$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-                  "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$tag" | jq -r .body || true)"
-          last="$(printf '%s' "$body" | sed -n 's/^upstream: \([0-9a-f]\{40\}\).*/\1/p')"
-          last_glue="$(printf '%s' "$body" | sed -n 's/^glue: \([0-9a-f]\{16\}\).*/\1/p')"
-          if [ -n "$last" ] && [ -n "$last_glue" ] && [ "$last" = "$sha" ] && [ "$last_glue" = "$glue" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "✅ $tag 已经是这个上游提交 + 这套胶水（$sha / $glue），跳过"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "📦 $tag: 上游 ${last:-<无记录>} → $sha ；胶水 ${last_glue:-<无记录>} → $glue"
-          fi
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          BUILD_SHA: ${{ github.sha }}
+        run: bash _build_repo/ci/resolve-target.sh
 
   # -------- npm tarball 集合（ubuntu） --------
   npm:
@@ -144,43 +92,32 @@ jobs:
           repository: deepseek-ai/deepseek-harness
           ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
-
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          path: _build_repo
+          sparse-checkout: ci
       # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
       - name: Align packageManager pin with the pnpm we run
-        shell: bash
-        run: |
-          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
-          node -p "require('./package.json').packageManager"
-
+        run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
-
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
-
-      # 打印实际生效的 pnpm：它已与 packageManager 对齐，任何回退都会在这里现形
       - name: Show toolchain versions
-        run: |
-          pnpm --version
-          node --version
-
+        run: pnpm --version && node --version
       - name: Install dependencies
         run: pnpm --pm-on-fail=ignore install --frozen-lockfile
-
       - name: Build
         run: pnpm --pm-on-fail=ignore run build:official
-
       - name: Pack release tarballs
         run: pnpm --pm-on-fail=ignore run release:pack --family dsh --out dist/npm
-
       - name: Archive npm tarballs
-        shell: bash
-        run: |
-          zip -r "dsh-npm-tarballs-${{ needs.check.outputs.short_sha }}.zip" dist/npm
-
+        run: zip -r "dsh-npm-tarballs-${{ needs.check.outputs.short_sha }}.zip" dist/npm
       - uses: actions/upload-artifact@v7
         with:
           name: dsh-npm-tarballs
@@ -192,313 +129,70 @@ jobs:
     needs: check
     if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
-
-      # 二次 checkout 自己的仓库，取 portable/ 下的启动器与更新器源码。
-      # 必须显式 ref：不带 ref 时 checkout 取的是仓库**默认分支**（现在是 dev），
-      # 于是在 main 上跑 CI 时，_build_repo 里会是 dev 的胶水 —— 分支验证会失真。
+      # 二次 checkout 自己的仓库。必须显式 ref：不带 ref 时取的是**默认分支**（dev），
+      # 在 main 上跑 CI 时 _build_repo 里会是 dev 的胶水 —— 分支验证会失真。
       - uses: actions/checkout@v7
         with:
           repository: citydirector/DSH-build
           ref: ${{ github.sha }}
           path: _build_repo
-
-      # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
       - name: Align packageManager pin with the pnpm we run
-        shell: pwsh
-        run: |
-          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
-          node -p "require('./package.json').packageManager"
-
+        run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
-
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
-
-      # 打印实际生效的 pnpm：它已与 packageManager 对齐，任何回退都会在这里现形
       - name: Show toolchain versions
-        shell: pwsh
-        run: |
-          pnpm --version
-          node --version
-
+        run: pnpm --version; node --version
       - name: Install dependencies (hoisted)
-        shell: pwsh
         run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.node-linker=hoisted --config.allowUnusedPatches=true
-
       - name: Build
-        shell: pwsh
         run: pnpm --pm-on-fail=ignore run build:official
 
-      # 跑 patch-peers 单测（独立 fixtures，不依赖上游构建产物；本地改动先过测试再打包）
-      - name: Run patch-peers tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-peers.test.mjs
-      # 跑 patch-native-code 单测（上下文转义 / 自愈 / 幂等，同一套独立 fixtures）
-      - name: Run patch-native-code tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-native-code.test.mjs
-      - name: Run patch-session-lock tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-session-lock.test.mjs
-      # 跑 patch-tool-schema 单测（注入 / 幂等 / 自愈 / unmatched 安全网 + 助手的运行时语义）
-      - name: Run patch-tool-schema tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-tool-schema.test.mjs
+      # 全部补丁单测（独立 fixtures，不依赖上游构建产物）
+      - name: Run patch tests
+        run: node --test "_build_repo/tests/*.test.mjs"
 
-      # 哨兵：把 workspace 里**精确版本**钉法的 peer 列出来（note 级，永远不拦构建）。
-      # 上游的插件 peer 是精确版本，兼容门禁又只校验 @deepseek-ai/dsh* 那几条 —— 精确钉版
-      # 意味着 profile 安装的插件在 harness 每次升版时失效，插件只能随包。这条因果要一直
-      # 看得见：钉版变多 = 上游又收紧了；全没了 = 可以回头重新评估 profile 安装这条路。
+      # 哨兵：列出 workspace 里**精确版本**钉法的 peer（note 级，永远不拦构建）。
+      # 钉版变多 = 上游又收紧了；全没了 = 可以回头重新评估 profile 安装这条路。
       - name: Check peer pins (note)
-        shell: pwsh
         run: |
           node _build_repo/portable/check-peer-pins.mjs --self-test
           if ($LASTEXITCODE -ne 0) { throw "check-peer-pins --self-test 失败（扫描逻辑坏了）" }
           node _build_repo/portable/check-peer-pins.mjs .
           if ($LASTEXITCODE -ne 0) { throw "check-peer-pins 失败：一个 @deepseek-ai 包都没扫到，目录布局变了？" }
 
-      # deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，
-      # 依赖(含 workspace 包)装进 app/node_modules。不加 --prod（dsh 运行时插件在
-      # devDependencies，靠 cordis 动态加载）；不加 auto-install-peers=false。
-      # 注意：pnpm deploy 要求目标目录为空（ERR_PNPM_DEPLOY_DIR_NOT_EMPTY），所以迁移器
-      # 的构建必须排在 deploy 之后。
-      - name: Deploy portable runtime
-        shell: pwsh
-        run: |
-          # allowUnusedPatches：deploy 只取 @deepseek-ai/dsh 子集，上游 pnpm-workspace.yaml
-          # 里的 macOS/desktop 补丁（@electron/osx-sign 等）不在子集内，pnpm 会报
-          # ERR_PNPM_UNUSED_PATCH 使构建失败；该开关允许未使用的补丁（仅告警）。
-          pnpm --pm-on-fail=ignore --filter @deepseek-ai/dsh deploy --legacy `
-            --config.allowUnusedPatches=true `
-            --config.node-linker=hoisted `
-            --config.link-workspace-packages=true `
-            portable/app
-
-      # 会话代际迁移器：把上游 scripts/migrate-sessions-to-v4.ts 打成随包分发的单文件 ESM
-      # （相对 import 内联，@deepseek-ai/* 保持 external 走 app/node_modules —— 迁移逻辑用的
-      # 仍是上游自己的机器，不是我们重写的副本）。dsh.exe 启动时跑一次，把本地 v2/v3 会话
-      # 补迁移到 v4。上游只在「写打开」(resume) 时才升级，不能指望用户逐条 resume。
-      # 必须排在 deploy 之后：pnpm deploy 要求目标目录为空。
-      - name: Build session migrator bundle
-        shell: pwsh
-        run: |
-          node _build_repo\portable\build-migrator.mjs . portable\app\migrate-sessions-v4.mjs
-
-      # deploy 会系统性漏掉 workspace 包之间的 peer 依赖（auto-install-peers 对
-      # deploy 无效）。patch-peers.mjs 遍历 workspace 全部 @deepseek-ai 包，把缺失的
-      # 补齐（复制 lib/ + package.json）。实测补 55 个包，--dump-default-config 全绿。
-      - name: Patch missing workspace packages
-        shell: pwsh
-        run: |
-          node _build_repo\portable\patch-peers.mjs . portable\app\node_modules\@deepseek-ai
-
-      # schemastery 依赖 @standard-schema/spec（registry 包，非 workspace），从 install 结果复制
-      - name: Patch registry peer (standard-schema)
-        shell: pwsh
-        run: |
-          if (Test-Path "node_modules\@standard-schema\spec") {
-            New-Item -ItemType Directory -Force "portable\app\node_modules\@standard-schema" | Out-Null
-            Copy-Item "node_modules\@standard-schema\spec" "portable\app\node_modules\@standard-schema\spec" -Recurse -Force
-          }
-
-      # 体积优化：删 sourcemap + build 工具（编译/lint/打包器/hooks，运行时绝不 import）。
-      # typescript 被 dsh-typert-generator（编译期生成器）依赖，但运行时无 import，可删。
-      - name: Strip build tools and sourcemaps
-        shell: pwsh
-        run: |
-          $nm = "portable\app\node_modules"
-          Get-ChildItem $nm -Recurse -Filter "*.map" -File | Remove-Item -Force -ErrorAction SilentlyContinue
-          $buildTools = @(
-            'typescript','tsx','@esbuild','@rolldown','@oxlint','@oxlint-tsgolint',
-            'lefthook','lefthook-windows-x64','lightningcss','lightningcss-win32-x64-msvc',
-            '@babel','tsdown','vite','rollup','eslint','webpack','terser','prettier','oxc-resolver'
-          )
-          foreach ($t in $buildTools) {
-            $p = Join-Path $nm $t
-            if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
-          }
-
-      # deploy 漏掉 workspace 包的 registry 依赖（实测 cordis-plugin-hmr 的
-      # @babel/code-frame 没带上，HMR 插件运行时 import 它导致闪退）。
-      # patch-dep.mjs 从 root node_modules 递归补齐缺失依赖链，并把种子**声明进目标清单**。
-      #
-      # 后两个（computer-use 的注册表与原生提供方）文件本来就在树里（patch-peers 拷的），
-      # 列在这里是为了让清单里出现它们：dsh 判断"哪些包能被 profile 的插件行解析"看的就是
-      # 安装清单的 dependencies ∪ peerDependencies。只拷文件不声明 = 行被判未安装、整套插件
-      # 静默消失（stderr 只有一句 "failed to import"，GUI 应用看不到）。实测补上即恢复。
-      #
-      # browser-use 同理：注册表 / 运行时 / 选定提供方（chrome-devtools-mcp）三个 workspace 包由
-      # patch-peers 拷进来，列在这里是为了让清单里出现它们；chrome-devtools-mcp 是提供方自己的
-      # registry 依赖，patch-peers 不管，得靠 patch-dep 从 root node_modules 带过来。
-      - name: Patch runtime deps (deploy 漏的 registry 依赖)
-        shell: pwsh
-        run: |
-          node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules @babel/code-frame @deepseek-ai/schemastery @trycua/cua-driver @deepseek-ai/dsh-computer-use @deepseek-ai/dsh-experimental-computer-use-cua-driver-native chrome-devtools-mcp @deepseek-ai/dsh-browser-use @deepseek-ai/dsh-experimental-browser-use-runtime @deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp
-
-      # 断言补进来的东西真在位。patch-dep 找不到种子时只 warn 不报错（"缺失于 root，跳过"），
-      # 于是这类洞会静默复发 —— @babel/code-frame、@standard-schema/spec 都是这么漏过去的。
-      # 缺了 SDK，官方 computer-use 提供方会在激活时抛「原生模块导入失败」，而那时已经出包了。
-      # @trycua/cua-driver 是 patch-peers 拷进来的 workspace 包缺的 registry 依赖：补上它，
-      # computer use 就随包发行、版本与 app 同生共死（否则得在 profile 里单装一份，还得每次
-      # 更新后重装 —— 提供方的 peer 是精确版本，旧副本会被判为不兼容而跳过）。
-      - name: Assert the Cua Driver SDK shipped
-        shell: pwsh
-        run: |
-          $must = @(
-            'app\node_modules\@trycua\cua-driver\package.json',
-            'app\node_modules\@trycua\cua-driver-win32-x64-msvc',
-            'app\node_modules\@ubjs\core',
-            'app\node_modules\@ubjs\node'
-          )
-          $missing = @()
-          foreach ($m in $must) { if (-not (Test-Path "portable\$m")) { $missing += $m } }
-          if ($missing.Count -gt 0) { throw ("Cua Driver SDK 没补进来：" + ($missing -join ', ')) }
-          $sdk = Get-Item 'portable\app\node_modules\@trycua\cua-driver\package.json'
-          $native = Get-ChildItem 'portable\app\node_modules\@trycua\cua-driver-win32-x64-msvc' -Recurse -Filter '*.node' -ErrorAction SilentlyContinue | Select-Object -First 1
-          Write-Host ("cua-driver 已随包（package.json " + $sdk.Length + " 字节）；原生二进制：" + $(if ($native) { $native.Name + " / " + [math]::Round($native.Length / 1MB, 1) + " MB" } else { '(未找到 .node)' }))
-
-          # 文件在位还不够：这些包必须**出现在安装清单里**，否则 profile 的插件行会被判未安装
-          # （dsh-app-boot 只认清单的 dependencies ∪ peerDependencies）。行消失时 stderr 只有
-          # "failed to import"，GUI 应用看不到 —— 所以在这里断言。
-          $manifest = Get-Content 'portable\app\package.json' -Raw | ConvertFrom-Json
-          $names = @($manifest.dependencies.PSObject.Properties.Name)
-          $undeclared = @()
-          foreach ($n in @('@trycua/cua-driver', '@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native')) {
-            if ($names -notcontains $n) { $undeclared += $n }
-          }
-          if ($undeclared.Count -gt 0) { throw ("portable\app\package.json 未声明：" + ($undeclared -join ', ') + " —— profile 插件行会被判未安装") }
-          Write-Host ("已声明：" + (@('@trycua/cua-driver', '@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native') -join ', '))
-
-      # browser-use 同理，只是换成纯 JS 那一族：包在位 + 清单里有名，profile 的插件行才解析得到。
-      # 单独一个 step 是为了失败时一眼看出是哪一族缺件。
-      - name: Assert browser-use shipped and declared
-        shell: pwsh
-        run: |
-          $names = @(
-            'chrome-devtools-mcp',
-            '@deepseek-ai/dsh-browser-use',
-            '@deepseek-ai/dsh-experimental-browser-use-runtime',
-            '@deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp'
-          )
-          $missing = @()
-          foreach ($n in $names) {
-            if (-not (Test-Path ("portable\app\node_modules\" + $n + "\package.json"))) { $missing += $n }
-          }
-          if ($missing.Count -gt 0) { throw ("browser-use 没补进来：" + ($missing -join ', ')) }
-          $manifest = Get-Content 'portable\app\package.json' -Raw | ConvertFrom-Json
-          $declared = @($manifest.dependencies.PSObject.Properties.Name)
-          $undeclared = @()
-          foreach ($n in $names) { if ($declared -notcontains $n) { $undeclared += $n } }
-          if ($undeclared.Count -gt 0) { throw ("portable\app\package.json 未声明：" + ($undeclared -join ', ') + " —— profile 插件行会被判未安装") }
-          Write-Host ("browser-use 已随包并声明：" + ($names -join ', '))
-
-      # 应用本地修复（幂等、可自愈；上游修复后自动跳过）：
-      # 1. hasIntrinsicConstructor 的 toString 精确比较在真实浏览器输出带换行，
-      #    导致全对象被判非 lossless JSON、消息无法渲染 → 归一化空白后比较。
-      #    （同一模式还以内联字符串字面量的形态出现在 dsh-workflow-ptc 里，按上下文多转义一层。）
-      # 2. session v2→v3 迁移白名单缺历史 kind "instruction-hint"，
-      #    含旧 AGENTS.md 提示消息的会话迁移报错、无法加载 → 补入白名单。
-      #    这条同时是 v4 批量迁移能 0 拒绝的前提。
-      # 3. MCP 工具的 JSON Schema 由 createMcpToolDefinition 逐字交给模型路由；原生 cua driver
-      #    目录里的 verify_state 带一个布尔 enum（exists: [true]），而只认字符串枚举的路由
-      #    （8787 反代 / Gemini function declaration）会因此把**整条请求**打回一句通用 400 ——
-      #    只要该工具在表里，该路由每次请求都失败。摘掉非字符串 enum 即闭合。
-      - name: Apply local harness fixes (lossless-JSON guard + v3 migration kind + tool-schema enums)
-        shell: pwsh
-        run: |
-          node _build_repo\portable\patch-native-code.mjs portable\app\node_modules\@deepseek-ai
-          node _build_repo\portable\patch-session-lock.mjs portable\app\node_modules\@deepseek-ai
-          node _build_repo\portable\patch-tool-schema.mjs portable\app\node_modules\@deepseek-ai
-
-      # 迁移器装载校验：--help 之前会先解析全部 import。这一步专门验证迁移器的 external
-      # 依赖（cordis / dsh-session / format-catalog / persistence-jsonl …）确实落在
-      # app/node_modules 里 —— 否则迁移器会在用户机器上启动即崩，而我们这里发现不了。
-      - name: Smoke test session migrator (imports resolve)
-        shell: pwsh
-        run: |
-          $env:DSH_BUILD_COMMIT = "${{ needs.check.outputs.sha }}"
-          node portable\app\migrate-sessions-v4.mjs --help
-          if ($LASTEXITCODE -ne 0) { throw "migrate-sessions-v4.mjs 装载失败（external 依赖未解析）" }
-
-      # 复制 node 24 运行时（只取自包含的 node.exe；npm/corepack 等开发工具不需要）
-      - name: Copy node runtime
-        shell: pwsh
-        run: |
-          $nodeExe = (Get-Command node).Source
-          New-Item -ItemType Directory -Force portable\node | Out-Null
-          Copy-Item $nodeExe portable\node\node.exe -Force
-
-      # 编译启动器 + 更新器（.NET Framework 4.8 自带 csc）
+      # deploy → 迁移器 → 补 peer / registry 依赖 → 瘦身（顺序与理由见脚本）
+      - name: Assemble portable runtime
+        run: _build_repo/ci/portable/assemble-runtime.ps1
+      - name: Assert computer-use and browser-use shipped and declared
+        run: _build_repo/ci/portable/assert-shipped.ps1
+      - name: Apply local harness fixes and load-check the migrator
+        env:
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+        run: _build_repo/ci/portable/apply-fixes.ps1
       - name: Compile launcher and updater
-        shell: pwsh
-        run: |
-          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /nologo /target:exe /out:portable\dsh.exe `
-            /r:System.IO.Compression.FileSystem.dll `
-            _build_repo\portable\dsh-launcher.cs
-          & $csc /nologo /target:exe /out:portable\update.exe `
-            /r:System.IO.Compression.FileSystem.dll `
-            /r:System.IO.Compression.dll `
-            _build_repo\portable\dsh-updater.cs
-          if (-not (Test-Path portable\dsh.exe)) { throw "dsh.exe 编译失败" }
-          if (-not (Test-Path portable\update.exe)) { throw "update.exe 编译失败" }
-
-      - name: Write VERSION and GLUE
-        shell: pwsh
-        run: |
-          Set-Content -Path portable\VERSION -Value "${{ needs.check.outputs.sha }}" -NoNewline
-          # GLUE = 本仓库内容（除 pin 之外）的指纹。VERSION 只记上游提交号，于是"上游没动、胶水改了"
-          # 的更新（补丁脚本、启动器、更新器）在 update.exe 眼里不可见 —— 它比 VERSION 就永远说
-          # "已是最新版本"，这类修复根本送不到用户机器上。GLUE 让 update.exe 也认得出这种更新。
-          Set-Content -Path portable\GLUE -Value "${{ needs.check.outputs.glue }}" -NoNewline
-          if (-not (Test-Path portable\VERSION)) { throw "VERSION 未写入" }
-          if (-not (Test-Path portable\GLUE)) { throw "GLUE 未写入" }
-          "VERSION = $(Get-Content portable\VERSION)"
-          "GLUE    = $(Get-Content portable\GLUE)"
-
-      # 冒烟测试：用便携 node boot 完整插件树（--help 太弱，只打印帮助不加载插件）
-      - name: Smoke test
-        shell: pwsh
-        run: |
-          $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
-          $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
-          # 真正 boot（web 模式）：import 全部插件，比 --dump-default-config 更严格，
-          # 能捕获 deploy 漏掉的 registry 依赖（如 cordis-plugin-hmr 的 @babel/code-frame）。
-          $outLog = "_smoke.log"
-          $errLog = "_smoke.err.log"
-          $p = Start-Process -FilePath "portable\node\node.exe" -ArgumentList "portable\app\lib\bin.js","web" -NoNewWindow -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
-          $ok = $false
-          $deadline = (Get-Date).AddSeconds(60)
-          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-            Start-Sleep -Seconds 1
-            try {
-              $c = New-Object System.Net.Sockets.TcpClient
-              $ar = $c.BeginConnect("127.0.0.1", 3080, $null, $null)
-              if ($ar.AsyncWaitHandle.WaitOne(800)) { $c.EndConnect($ar); $c.Close(); $ok = $true; break }
-              $c.Close()
-            } catch {}
-          }
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-          if (-not $ok) {
-            $merged = @()
-            if (Test-Path $outLog) { $merged += Get-Content $outLog }
-            if (Test-Path $errLog) { $merged += Get-Content $errLog }
-            $merged | Out-File -FilePath $outLog -Encoding utf8
-            throw "dsh 冒烟测试失败（未能成功 boot，疑似缺依赖）"
-          }
-          Write-Host "dsh 成功 boot（3080 监听）"
-
-      # 失败时把 smoke 日志作为 artifact 上传（run 内拉不到日志，只能用 artifact 传递）
+        run: _build_repo/ci/compile-exes.ps1 -OutDir portable -Launcher
+      - name: Copy node runtime, write VERSION and GLUE
+        env:
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+          GLUE: ${{ needs.check.outputs.glue }}
+        run: _build_repo/ci/portable/stamp.ps1
+      - name: Smoke test (real boot)
+        run: _build_repo/ci/portable/smoke-boot.ps1
+      # 失败时把 smoke 日志作为 artifact 上传（notify-failure 读它）
       - name: Upload smoke log on failure
         if: failure()
         uses: actions/upload-artifact@v7
@@ -506,43 +200,10 @@ jobs:
           name: smoke-error
           path: _smoke.log
           retention-days: 3
-
-      # 校验「随包的应用撑得住它对外宣称的 bundle」。插件面板的分区靠两个硬编码名单
-      # （客户端 BUILTIN_PROFILE_BUNDLES / 宿主 OPTIONAL_BUNDLES），而 profile 选中的 bundle
-      # 未必是依赖 —— 只靠 app/node_modules 兜着；面板的开关（setBundleEnabled）又只改
-      # dsh.profile.bundles、不会安装它。兜不住就是启动时行加载失败，而且只有用户机器上看得见。
-      # 名单从**已部署的包**里解析，不写死；解析不出来就退出码 2，逼人来看。
-      # 放在 smoke test 之后：默认 profile 是 boot 时生成的，正好拿它当被测 profile。
-      - name: Check that the shipped app backs every advertised bundle
-        shell: pwsh
-        run: |
-          $cbArgs = @('_build_repo\portable\check-bundles.mjs', 'portable\app\node_modules')
-          if (Test-Path 'portable\data\profiles\web\package.json') {
-            $cbArgs += @('--profile', 'portable\data\profiles\web')
-          } else {
-            Write-Host "默认 profile 不存在，只校验随包名单"
-          }
-          node @cbArgs
-          if ($LASTEXITCODE -ne 0) { throw "check-bundles 失败：随包撑不住某个 bundle（见上面的清单）" }
-
-      # 默认 profile 是 harness boot 时生成的（无 version），而 package-inventory 插件要求
-      # 每个活跃条目所属包的 package.json 带非空 name+version；本地相对路径插件会解析到
-      # profile 自己，缺 version 即抛错。这里给打包的默认 profile 注入 version，防新装复发。
-      - name: Ensure default profile declares version
-        shell: pwsh
-        run: |
-          $pj = "portable/data/profiles/web/package.json"
-          if (-not (Test-Path $pj)) { Write-Host "默认 profile 不存在，跳过"; exit 0 }
-          node -e "const fs=require('fs');const p='portable/data/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.version){j.version='0.1.0';fs.writeFileSync(p,JSON.stringify(j,null,2))}else{console.log('already has version '+j.version)}"
-
-      # smoke 产物不能进发行包；_smoke*.log 在 portable/ 之外，无需额外排除
-      - name: Package portable zip
-        shell: pwsh
-        run: |
-          # 冒烟测试会留下 data/（含会话 grant、匿名 id、workspace 状态），不进发行包。
-          Remove-Item portable\data -Recurse -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path portable\* -DestinationPath "dsh-portable-win64-${{ needs.check.outputs.short_sha }}.zip"
-
+      - name: Check bundles and package portable zip
+        env:
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+        run: _build_repo/ci/portable/finalize.ps1
       - uses: actions/upload-artifact@v7
         with:
           name: dsh-portable-win64
@@ -550,90 +211,52 @@ jobs:
           retention-days: 7
 
   # -------- 桌面端绿色包（windows，Electron 外壳 + 内置 dsh 运行时） --------
-  # 与 portable 同一上游提交、同一 Release：产物 dsh-desktop-win64-<sha>.zip 由 release job 一并挂上。
-  # 与便携版的差别：用上游**自己的**依赖布局（isolated linker）与 Electron 运行时；
-  # 我们的兼容性补丁由 portable/patch-desktop-*.mjs 在构建期打进去（顺序见 build-desktop.mjs 头注释）。
+  # 与 portable 同一上游提交、同一 Release。用上游**自己的**依赖布局（isolated linker）与 Electron 运行时；
+  # 兼容性补丁由 portable/patch-desktop-*.mjs 在构建期打进去（顺序见 build-desktop.mjs 头注释）。
   desktop:
     needs: check
     if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
           ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
-
       - uses: actions/checkout@v7
         with:
           repository: citydirector/DSH-build
           ref: ${{ github.sha }}
           path: _build_repo
-
-      # 与 portable job 相同：把上游钉的 packageManager 对齐到我们要跑的 pnpm
       - name: Align packageManager pin with the pnpm we run
-        shell: pwsh
-        run: |
-          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));j.packageManager='pnpm@'+process.env.PNPM_VERSION;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n')"
-          node -p "require('./package.json').packageManager"
-
+        run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
-
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
-
       - name: Show toolchain versions
-        shell: pwsh
-        run: |
-          pnpm --version
-          node --version
-
+        run: pnpm --version; node --version
       # 桌面端不部署，所以**不加** node-linker=hoisted：prepare-*/electron-builder 都按上游 workspace 布局写的。
       - name: Install dependencies (workspace default linker)
-        shell: pwsh
         run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true
 
-      - name: Run desktop patch tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-desktop.test.mjs
-      - name: Run guest DevTools patch tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-desktop-guest-devtools.test.mjs
-      - name: Run patch-session-lock tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-session-lock.test.mjs
-      - name: Run patch-tool-schema tests
-        shell: pwsh
-        run: node _build_repo/tests/patch-tool-schema.test.mjs
-
-      # ACL 控制台修复的源码补丁由 build-desktop.mjs 打，所以这里也跑它的套件；
-      # 源码那半要靠 DSH_DESKTOP_SOURCE 指到 workspace 根的上游检出，否则整段静默跳过。
-      - name: Run windows-acl console patch tests
-        shell: pwsh
+      # DSH_DESKTOP_SOURCE 让 ACL 控制台补丁的测试连上游源码那半一起跑（否则静默跳过）
+      - name: Run patch tests
         env:
           DSH_DESKTOP_SOURCE: ${{ github.workspace }}
-        run: node _build_repo/tests/patch-windows-acl-runner-console.test.mjs
-      - name: Run windows-acl console repair tests
-        shell: pwsh
-        run: node _build_repo/tests/repair-windows-acl-runner-console.test.mjs
+        run: node --test "_build_repo/tests/*.test.mjs"
 
-      # 编译清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
+      # 清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
       - name: Compile updater
-        shell: pwsh
-        run: |
-          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /nologo /target:exe /out:_build_repo\portable\update.exe `
-            /r:System.IO.Compression.FileSystem.dll `
-            /r:System.IO.Compression.dll `
-            _build_repo\portable\dsh-updater.cs
-          if (-not (Test-Path _build_repo\portable\update.exe)) { throw "update.exe 编译失败" }
+        run: _build_repo/ci/compile-exes.ps1 -OutDir _build_repo\portable
 
       - name: Build desktop green package
-        shell: pwsh
         env:
           DSH_DESKTOP_SOURCE: ${{ github.workspace }}
           DSH_DESKTOP_TAG: ${{ needs.check.outputs.sha }}
@@ -641,11 +264,10 @@ jobs:
           DSH_DESKTOP_ZIP: ${{ github.workspace }}\dsh-desktop-win64-${{ needs.check.outputs.short_sha }}.zip
           DSH_DESKTOP_UPDATE_EXE: ${{ github.workspace }}\_build_repo\portable\update.exe
           # 打包后冒烟（smoke-packaged-runtime.ts）在 CI 上会失败：packaged 布局里的 LibreOffice 原生转换
-          # 返回空引用（loadComponentFromURL）。准备阶段的运行时冒烟（prepare:dsh）在 CI 上是**通过**的
-          # （DOCX/XLSX/PPTX→PDF + skill CLI discovery），产物另有 verify-desktop.mjs 静态验收，故这里不开启。
+          # 返回空引用（loadComponentFromURL）。准备阶段的运行时冒烟（prepare:dsh）在 CI 上是**通过**的，
+          # 产物另有 verify-desktop.mjs 静态验收，故这里不开启。
           DSH_DESKTOP_RUN_PACKAGED_SMOKE: "0"
         run: node _build_repo/portable/build-desktop.mjs
-
       - uses: actions/upload-artifact@v7
         with:
           name: dsh-desktop-win64
@@ -657,127 +279,56 @@ jobs:
     needs: [check, npm, portable, desktop]
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+      SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+      GLUE: ${{ needs.check.outputs.glue }}
+      GLUE_SHA: ${{ github.sha }}
     steps:
+      # 检出分支（而不是 sha）：dev 通道要在这里提交并推送 pin
       - uses: actions/checkout@v7
         with:
           repository: citydirector/DSH-build
           ref: ${{ github.ref_name }}
-
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-
-      - name: Remove old release
-        env:
-          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
-        run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-            echo "已删除旧 Release"
-          else
-            echo "无旧 Release 需要删除（首次构建）"
-          fi
-
-      - name: Create Release
-        env:
-          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
-          CHANNEL: ${{ needs.check.outputs.channel }}
-          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
-          GLUE_SHA: ${{ github.sha }}
-          GLUE: ${{ needs.check.outputs.glue }}
-        run: |
-          # dev 是 pre-release（不污染稳定 latest）；main 是正式版。
-          prerelease=""
-          if [ "$CHANNEL" = "dev" ]; then prerelease="--prerelease"; fi
-          if [ "$CHANNEL" = "main" ]; then
-            TITLE="DSH master"
-            NOTES="DSH 稳定版（dsh-master-latest）：由 main 分支发出，上游提交钉在 portable/upstream.pin（可复现）。历史会话与新版功能均正常，推荐使用。想尝鲜切到 dev 通道（dsh-dev-latest，每日跟随上游）。"
-          else
-            TITLE="DSH dev"
-            NOTES="DSH dev 通道（dsh-dev-latest，pre-release）：每日自动构建上游最新代码 + 本地兼容性修复。首次以本版本启动时会自动把本地 v2/v3 会话迁移到 v4（一次性、可回滚）。稳定版请用 dsh-master-latest。"
-          fi
-          # 机器可读的尾部：check 的跳过判定读的就是这里的 `upstream:` 与 `glue:` 两行，别再改格式。
-          NOTES="$(printf '%s\n\nupstream: %s\nglue: %s\nchannel: %s\nbuilt-from: %s' "$NOTES" "$UPSTREAM_SHA" "$GLUE" "$CHANNEL" "$GLUE_SHA")"
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TITLE ($(date +%Y%m%d))" \
-            --notes "$NOTES" \
-            $prerelease \
-            artifacts/*/*.zip
-
-      # dev 通道：发布成功后才推进 pin，让 pin 永远等于「dev 通道当前产物对应的上游提交」——
-      # 也就是 git log dev 上「跟到哪儿了」的记录。（跳过判定不看 pin，看 Release body 的
-      # `upstream:`/`glue:` 两行；pin 提交本身不改胶水指纹，所以不会误触发重建。）
-      # （用 GITHUB_TOKEN 推送不会再触发 workflow，不会自我循环。）
+      - name: Publish release
+        run: bash ci/release/publish.sh
       - name: Advance the upstream pin (dev only)
         if: needs.check.outputs.channel == 'dev'
-        run: |
-          if [ "$(cat portable/upstream.pin)" = "${{ needs.check.outputs.sha }}" ]; then
-            echo "pin 已指向本次构建的上游提交，无需提交"
-            exit 0
-          fi
-          echo "${{ needs.check.outputs.sha }}" > portable/upstream.pin
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add portable/upstream.pin
-          git commit -m "chore(dev): track upstream ${{ needs.check.outputs.short_sha }}"
-          git push
-
-      # -------- 通知（成功） --------
+        run: bash ci/release/advance-pin.sh
       - name: Send notification (success)
         if: success()
         env:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
-          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
-        run: |
-          sha="${{ needs.check.outputs.short_sha }}"
-          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
-          jq -n --arg sha "$sha" --arg url "$url" \
-            '{title:"DSH 构建成功",desp:("✅ DSH 构建完成\n\n提交: "+$sha+"\n\n下载: "+$url)}' \
-            > /tmp/body.json
-          curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
-            "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
+        run: bash ci/notify.sh success
 
   # -------- 失败通知（独立 job：任一 job 失败都触发） --------
-  # 关键：不能放在 release job 里——release 的 needs 失败时会被整体跳过，导致
-  # if: failure() 永不触发。独立 job + job 级 if: failure() 才能捕获上游失败。
-  # release 也放进 needs：只依赖 check/npm/portable 的话，release 自己失败（例如 pin
-  # 提交那一步）不会有任何通知 —— 这个坑当场踩到过一次。
+  # 不能放在 release job 里：release 的 needs 失败时会被整体跳过，if: failure() 永不触发。
+  # release 也要在 needs 里，否则 release 自己失败（例如 pin 提交那一步）不会有通知。
   notify-failure:
     needs: [check, npm, portable, desktop, release]
     if: failure()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          sparse-checkout: ci
       - name: Download smoke error artifact
         uses: actions/download-artifact@v8
         with:
           name: smoke-error
           path: error-artifact
         continue-on-error: true
-
       - name: Send failure notification
         env:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
-        run: |
-          # 主来源：失败步骤的真实日志。以前只读 smoke artifact，install/deploy 阶段失败时
-          # _smoke.log 根本不存在，通知里的「错误摘要」永远是空的，等于没通知。
-          err=""
-          err=$(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null \
-                | sed 's/\x1b\[[0-9;]*m//g' \
-                | grep -aE "ERR_PNPM|ERR_|Cannot find|Cannot resolve|##\[error\]|throw|failed" \
-                | tail -20 || true)
-          # smoke 失败时 _smoke.log 里的错误更精确，覆盖上面的摘要
-          if [ -s error-artifact/_smoke.log ]; then
-            smoke=$(grep -iE "error|cannot find|cannot resolve|not found|throw|ERR_" error-artifact/_smoke.log | head -20 || true)
-            if [ -n "$smoke" ]; then err="$smoke"; fi
-          fi
-          jq -n \
-            --arg sha "${{ needs.check.outputs.short_sha }}" \
-            --arg err "$err" \
-            --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{title:("DSH 构建失败 - "+$sha),desp:("❌ DSH 构建失败\n\n提交: "+$sha+"\n\n日志: "+$url+"\n\n错误摘要:\n```\n"+$err+"\n```")}' \
-            > /tmp/body.json
-          curl -sf -X POST -H "Content-Type: application/json" --data-binary @/tmp/body.json \
-            "https://$SC3_UID.push.ft07.com/send/$SC3_SENDKEY.send" || true
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+        run: bash ci/notify.sh failure
