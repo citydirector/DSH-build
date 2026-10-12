@@ -4,7 +4,7 @@
 // 上游 `apps/desktop/src/browser-guests.ts` 给 guest 写死了 `devTools: !app.isPackaged`，
 // 所以开发版能检查、打包版不能；主窗口的 F12 不受影响（main.ts 的 devTools: true）。
 // 本补丁做两件事，幂等：
-//   1. guest 的 webPreferences 改为 `devTools: true`；
+//   1. guest 的 webPreferences 在打包版也允许 DevTools（环境变量 DSH_DESKTOP_GUEST_DEVTOOLS=0 可关回去）；
 //   2. guest 获得焦点时，F12 或 Ctrl+Shift+I 切换该 guest 自己的 DevTools（独立窗口）。
 //      主窗口菜单里的 toggleDevTools 只作用于主窗口的 webContents，碰不到 guest，所以要单独绑定。
 // 其余安全设置（sandbox / contextIsolation / webSecurity / 禁止 nodeIntegration 等）保持不变。
@@ -20,7 +20,9 @@ export const EDITS = [
   {
     name: 'guest webPreferences: allow DevTools in packaged builds',
     from: '        devTools: !app.isPackaged,\n',
-    to: '        devTools: true, // DSH-build: inspect embedded browser pages in packaged builds too\n',
+    // 保留对 app 的引用：上游开了 noUnusedLocals，删掉 app.isPackaged 会让 `app` 导入变成未使用而编译失败。
+    to: "        // DSH-build: inspect embedded browser pages in packaged builds too; DSH_DESKTOP_GUEST_DEVTOOLS=0 opts out.\n"
+      + "        devTools: !app.isPackaged || process.env.DSH_DESKTOP_GUEST_DEVTOOLS !== '0',\n",
   },
   {
     name: 'guest input: F12 / Ctrl+Shift+I toggles the guest DevTools',
