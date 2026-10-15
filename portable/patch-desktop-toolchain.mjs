@@ -12,8 +12,8 @@
 //
 // 已知（有意为之）：`apps/desktop/scripts/package-target.ts` 里一共有三处
 // `scripts/smoke-packaged-runtime.ts` 调用：darwin 非 directory 分支、darwin directory 分支（都不带
-// `--unsigned`），以及最后带 `invocation.unsigned ? ['--unsigned']` 的 else 分支。前两处只在 macOS
-// 构建路径上，Windows 目录构建走不到，所以本补丁**只包 else 分支那一处**（锚点即该行全文）。
+// `--unsigned`），以及最后带 `--unsigned` / `--skip-notarization` 条件参数的 else 分支（上游 fdbe2bce 起拆成两行）。前两处只在 macOS
+// 构建路径上，Windows 目录构建走不到，所以本补丁**只包 else 分支那一处**（锚点即该调用的两行全文）。
 //
 // 用法: node patch-desktop-toolchain.mjs <repo-root>
 import { applyEditsToFiles } from './lib/apply-edits.mjs'
@@ -54,12 +54,14 @@ export const EDITS = [
   {
     name: 'packaging: allow skipping the post-package runtime smoke',
     file: 'apps/desktop/scripts/package-target.ts',
-    from: "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', ...(invocation.unsigned ? ['--unsigned'] : [])], targetEnv)\n",
+    from: "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',\n"
+      + "      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)\n",
     to: "    // DSH-build: this smoke loads the packaged Python runtime (lxml); under a deep build directory its\n"
       + "    // site-packages paths exceed MAX_PATH and the DLL load fails with ERROR_FILENAME_EXCED_RANGE — an\n"
       + "    // environment limit, not an artifact defect. The pre-package runtime smoke in prepare:dsh still runs.\n"
       + "    if (environment.DSH_DESKTOP_SKIP_PACKAGED_SMOKE !== '1') {\n"
-      + "      await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', ...(invocation.unsigned ? ['--unsigned'] : [])], targetEnv)\n"
+      + "      await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',\n"
+      + "        ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)\n"
       + "    }\n",
   },
 ]
