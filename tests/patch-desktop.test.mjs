@@ -42,7 +42,8 @@ function makeTree() {
   write('apps/desktop/src/main.ts', "import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'\n\nconst x = 1\n")
   write('apps/desktop/scripts/package-target.ts',
     'export async function packageTarget(invocation, targetEnv) {\n'
-    + "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', ...(invocation.unsigned ? ['--unsigned'] : [])], targetEnv)\n"
+    + "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',\n"
+    + "      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)\n"
     + '}\n')
   write('apps/desktop/scripts/desktop-toolchain-preflight.ts',
     'export async function probeDesktopToolchain(platform, environment = process.env) {\n'
@@ -64,7 +65,8 @@ function patchElectronBuilderEmbed(root) {
     + "        '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {\n"
     + "        env: scrubWindowsSigningEnvironment(env), windowsHide: true,\n"
     + "      })\n      return true\n    },\n"
-    + "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', ...(invocation.unsigned ? ['--unsigned'] : [])], targetEnv)\n")
+    + "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',\n"
+    + "      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)\n")
 }
 
 const tests = []
