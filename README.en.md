@@ -23,7 +23,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 
 | Change | Effect | Pkg | Script |
 |---|---|---|---|
-| All state inside the folder | `DSH_HOME` and Electron's userData / cache / logs live in `data/`. No registry, nothing in the user profile; delete the folder to uninstall | 🟢🔵 | `dsh-launcher.cs` · `patch-desktop-portable.mjs` (source) |
+| All state inside the folder | `DSH_HOME` and Electron's userData / cache / logs live in `data/`; unset `XDG_*` variables point at `data/xdg/`, so XDG-following plugins (e.g. billion-context) stay inside too, and the Node process such plugins spawn is pinned to the bundled runtime (`BILLION_CONTEXT_NODE`). No registry, nothing in the user profile; delete the folder to uninstall | 🟢🔵 | `dsh-launcher.cs` · `patch-desktop-portable.mjs` (source) |
 | No forced official update | Self-built desktop never polls Platform or shows the mandatory-update overlay; the package has no electron-updater feed | 🔵 | `patch-desktop-update.mjs` (source) |
 | Directory build without installer toolchain | Skips the VS C++ Build Tools / Windows SDK checks and NSIS prep behind an env switch; upstream defaults unchanged | 🔵 | `patch-desktop-toolchain.mjs` (source) |
 

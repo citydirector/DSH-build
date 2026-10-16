@@ -5,9 +5,12 @@
  * user-data paths are decided before anything reads them. A portable package
  * ships a `portable.flag` marker next to the executable; without that marker
  * this module does nothing and the application behaves exactly as upstream.
+ * It also points the XDG base directories at the data root, so XDG-following
+ * plugins stay inside the package too.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 
@@ -44,6 +47,58 @@ function redirectElectronPaths(dataRoot: string): void {
   }
 }
 
+/**
+ * XDG base directories, as `[variable, data-root subdirectory, home fallback]`.
+ * Plugins that follow XDG (billion-context writes its log, config, session index
+ * and MITM CA through these) otherwise fall back to the user profile.
+ */
+const XDG_DIRECTORIES = [
+  ['XDG_CONFIG_HOME', 'config', '.config'],
+  ['XDG_DATA_HOME', 'data', join('.local', 'share')],
+  ['XDG_STATE_HOME', 'state', join('.local', 'state')],
+  ['XDG_CACHE_HOME', 'cache', '.cache'],
+] as const
+
+/** Per-application folders carried over from the user profile on first portable launch. */
+const XDG_CARRY_OVER = ['billion-context'] as const
+
+/**
+ * Keep XDG-following plugins inside the package. A variable the user already set is
+ * respected. Each carried-over folder is copied (never moved) once, when the package
+ * copy does not exist yet, so existing plugin state such as compressed-session indexes
+ * survives the switch; the user-profile original stays until the user deletes it.
+ */
+function redirectXdgPaths(dataRoot: string): void {
+  for (const [variable, subdirectory, fallback] of XDG_DIRECTORIES) {
+    if (process.env[variable]?.trim()) continue
+    const target = join(dataRoot, 'xdg', subdirectory)
+    mkdirSync(target, { recursive: true })
+    process.env[variable] = target
+    for (const name of XDG_CARRY_OVER) {
+      const legacy = join(homedir(), fallback, name)
+      const destination = join(target, name)
+      if (!existsSync(legacy) || existsSync(destination)) continue
+      try {
+        cpSync(legacy, destination, { recursive: true, errorOnExist: false })
+      } catch (error) {
+        console.error(`portable bootstrap: could not copy ${legacy}: ${String(error)}`)
+      }
+    }
+  }
+}
+
+/**
+ * Give plugins that spawn their own Node process (billion-context's proxy) the
+ * packaged Node runtime instead of whatever `node.exe` comes first on PATH, which may
+ * be absent, a system install, or not Node at all. A user-set value is respected.
+ */
+function pinPluginNodeRuntime(): void {
+  if (process.env.BILLION_CONTEXT_NODE?.trim()) return
+  const bundled = join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin',
+    process.platform === 'win32' ? 'node.exe' : 'node')
+  process.env.BILLION_CONTEXT_NODE = existsSync(bundled) ? bundled : process.execPath
+}
+
 /** Run the bundled batch migrator once per packaged runtime version. */
 function migrateSessionsOnce(dataRoot: string, exeDirectory: string): boolean {
   const version = readVersion(exeDirectory)
@@ -73,6 +128,8 @@ export function applyPortableBootstrap(): PortableBootstrapResult {
   mkdirSync(dataRoot, { recursive: true })
   process.env.DSH_HOME = dataRoot
   redirectElectronPaths(dataRoot)
+  redirectXdgPaths(dataRoot)
+  pinPluginNodeRuntime()
   const migrationRan = migrateSessionsOnce(dataRoot, exeDirectory)
   console.info(`portable bootstrap: data root ${dataRoot}${migrationRan ? ' (session migration ran)' : ''}`)
   return { portable: true, dataRoot, migrationRan }

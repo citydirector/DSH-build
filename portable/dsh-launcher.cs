@@ -1,5 +1,6 @@
 // dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
 // 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH
+//       → XDG_* 指到 data\xdg\（遵循 XDG 的插件如 billion-context 不再写 C 盘用户目录）
 //       → 首次以新版本启动时跑一次会话代际迁移（app\migrate-sessions-v4.mjs）→ 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
 // 子命令：--migrate-sessions 只跑会话代际迁移、不启动 dsh（迁移有失败项后的手动重跑入口）。
@@ -80,6 +81,16 @@ class DshLauncher
         // 把 node 加入 PATH，供插件与子进程调用
         string nodeDir = Path.Combine(baseDir, "node");
         Environment.SetEnvironmentVariable("PATH", nodeDir + ";" + Environment.GetEnvironmentVariable("PATH"));
+
+        // 绿色：遵循 XDG 的插件（billion-context 的日志/配置/会话索引/MITM 证书）默认写
+        // %USERPROFILE%\.config 等目录；改指到 data\xdg\。用户自己设过的变量不动。
+        // 不能放进 DSH_HOME\.env：XDG_ 属 bootstrap-only，在那里写会让 dsh 启动报错。
+        RedirectXdg(dataDir);
+
+        // billion-context 的代理要自己起一个 node 进程，默认按 PATH 找 node.exe（可能找到系统里
+        // 别的 node，甚至不是 Node 的同名程序，上游 #3383）。钉到随包 node；用户设过就不动。
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BILLION_CONTEXT_NODE")))
+            Environment.SetEnvironmentVariable("BILLION_CONTEXT_NODE", nodeExe);
 
         // --migrate-sessions：只跑会话代际迁移、不启动 dsh（迁移失败后的手动重跑入口）
         if (HasFlag(args, "--migrate-sessions"))
@@ -347,6 +358,51 @@ class DshLauncher
             Console.Error.WriteLine("会话迁移器启动失败：" + ex.Message);
             return 1;
         }
+    }
+
+    // ── XDG 重定向 ───────────────────────────────────────────────────────────
+    // 每个 XDG 变量：未设置时指到 data\xdg\<子目录>。第一次切换时把用户目录里已有的
+    // billion-context 文件夹复制（不移动）过来，保住已压缩会话的索引；原件留着，确认无误后可自行删除。
+    static readonly string[][] XdgDirs = new string[][]
+    {
+        new string[] { "XDG_CONFIG_HOME", "config", ".config" },
+        new string[] { "XDG_DATA_HOME", "data", ".local\\share" },
+        new string[] { "XDG_STATE_HOME", "state", ".local\\state" },
+        new string[] { "XDG_CACHE_HOME", "cache", ".cache" },
+    };
+    static readonly string[] XdgCarryOver = new string[] { "billion-context" };
+
+    static void RedirectXdg(string dataDir)
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (string[] d in XdgDirs)
+        {
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(d[0]))) continue;
+            string target = Path.Combine(Path.Combine(dataDir, "xdg"), d[1]);
+            try { Directory.CreateDirectory(target); } catch { continue; }
+            Environment.SetEnvironmentVariable(d[0], target);
+            if (string.IsNullOrEmpty(home)) continue;
+            foreach (string name in XdgCarryOver)
+            {
+                string legacy = Path.Combine(Path.Combine(home, d[2]), name);
+                string destination = Path.Combine(target, name);
+                if (!Directory.Exists(legacy) || Directory.Exists(destination)) continue;
+                try { CopyDirectory(legacy, destination); }
+                catch (Exception ex)
+                {
+                    try { Console.Error.WriteLine("复制 " + legacy + " 失败：" + ex.Message); } catch { }
+                }
+            }
+        }
+    }
+
+    static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string file in Directory.GetFiles(source))
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), false);
+        foreach (string dir in Directory.GetDirectories(source))
+            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
     }
 
     static bool HasFlag(string[] args, string flag)
