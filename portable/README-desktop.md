@@ -6,7 +6,7 @@
 2. 双击 `DeepSeek Harness.exe`
 3. 想直接接管现有数据：把便携版 `data/` 的内容复制进包内 `data/`（桌面端用自己的 profile：`data/profiles/desktop`，首启由 app 生成官方默认 profile；本包不预置任何个人配置与 preset）
 
-**绿色承诺**：可执行文件旁有 `portable.flag` 时，`DSH_HOME` = 包内 `data/`，Electron 的 `userData`/`sessionData`/`cache`/`logs`/`crashDumps` 也全部重定向到 `data/electron/` —— 不写注册表、不写 C 盘用户目录；删除整个目录即彻底卸载。
+**绿色承诺**：可执行文件旁有 `portable.flag` 时，`DSH_HOME` = 包内 `data/`，Electron 的 `userData`/`sessionData`/`cache`/`logs`/`crashDumps` 也全部重定向到 `data/electron/`；未设置的 `XDG_{CONFIG,DATA,STATE,CACHE}_HOME` 指到 `data/xdg/`（首次切换时把用户目录里已有的 `billion-context` 文件夹复制过来，原件保留），`BILLION_CONTEXT_NODE` 指到随包 node —— 不写注册表、不写 C 盘用户目录；删除整个目录即彻底卸载。
 
 ## 目录结构
 

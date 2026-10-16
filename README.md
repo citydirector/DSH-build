@@ -23,7 +23,7 @@
 
 | 改动 | 效果 | 包 | 脚本 |
 |---|---|---|---|
-| 数据全部放进程序目录 | `DSH_HOME`、Electron 的 userData / cache / logs 全部落在 `data/`，不写注册表、不写 C 盘用户目录，删目录即卸载 | 🟢🔵 | `dsh-launcher.cs` · `patch-desktop-portable.mjs`（源码） |
+| 数据全部放进程序目录 | `DSH_HOME`、Electron 的 userData / cache / logs 全部落在 `data/`；未设置的 `XDG_*` 指到 `data/xdg/`，遵循 XDG 的插件（如 billion-context）也留在包内，插件自起的 node 进程钉到随包运行时（`BILLION_CONTEXT_NODE`）；不写注册表、不写 C 盘用户目录，删目录即卸载 | 🟢🔵 | `dsh-launcher.cs` · `patch-desktop-portable.mjs`（源码） |
 | 去掉官方强制更新 | 自建桌面端不轮询 Platform，不弹「必须更新」遮罩；产物里没有 electron-updater 来源 | 🔵 | `patch-desktop-update.mjs`（源码） |
 | 只出目录、免安装器工具链 | 跳过 VS C++ Build Tools / Windows SDK 预检和 NSIS 准备步骤（加环境开关，不改上游默认行为） | 🔵 | `patch-desktop-toolchain.mjs`（源码） |
 
