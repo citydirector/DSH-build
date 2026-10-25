@@ -36,11 +36,27 @@ export const EDITS = [
   {
     name: 'packaging: skip installer UI preparation for a directory-only build',
     file: 'apps/desktop/scripts/electron-builder-config.mjs',
-    from: "      await promisify(execFile)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',\n"
+    // 上游 9ce74cda 起 prepare 之后紧跟一行 strings.nsh 落盘（installer-locales），它同样是
+    // 安装器专属产物；只包住 prepare 会留下这行 ENOENT（prepare 被跳过 → installer-ui 目录不存在）。
+    // 旧形态（只包 prepare）作为第二种 from，好让已经打过旧补丁的树能就地升级。
+    from: [
+      "      await promisify(execFile)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',\n"
       + "        fileURLToPath(new URL('./prepare-windows-installer.ps1', import.meta.url)),\n"
       + "        '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {\n"
       + "        env: scrubWindowsSigningEnvironment(env), windowsHide: true,\n"
-      + "      })\n",
+      + "      })\n"
+      + "      await writeFile(join(buildPaths.root, 'installer-ui', 'strings.nsh'), renderInstallerStrings(readInstallerLocales()), 'utf8')\n",
+      "      // DSH-build: installer UI preparation needs Visual Studio C++ Build Tools + a Windows SDK and is\n"
+      + "      // only consumed by the NSIS installer; skip it when producing the unpacked directory.\n"
+      + "      if (env.DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN !== '1') {\n"
+      + "        await promisify(execFile)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',\n"
+      + "          fileURLToPath(new URL('./prepare-windows-installer.ps1', import.meta.url)),\n"
+      + "          '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {\n"
+      + "          env: scrubWindowsSigningEnvironment(env), windowsHide: true,\n"
+      + "        })\n"
+      + "      }\n"
+      + "      await writeFile(join(buildPaths.root, 'installer-ui', 'strings.nsh'), renderInstallerStrings(readInstallerLocales()), 'utf8')\n",
+    ],
     to: "      // DSH-build: installer UI preparation needs Visual Studio C++ Build Tools + a Windows SDK and is\n"
       + "      // only consumed by the NSIS installer; skip it when producing the unpacked directory.\n"
       + "      if (env.DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN !== '1') {\n"
@@ -49,6 +65,7 @@ export const EDITS = [
       + "          '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {\n"
       + "          env: scrubWindowsSigningEnvironment(env), windowsHide: true,\n"
       + "        })\n"
+      + "        await writeFile(join(buildPaths.root, 'installer-ui', 'strings.nsh'), renderInstallerStrings(readInstallerLocales()), 'utf8')\n"
       + "      }\n",
   },
   {

@@ -64,7 +64,9 @@ function patchElectronBuilderEmbed(root) {
     + "        fileURLToPath(new URL('./prepare-windows-installer.ps1', import.meta.url)),\n"
     + "        '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {\n"
     + "        env: scrubWindowsSigningEnvironment(env), windowsHide: true,\n"
-    + "      })\n      return true\n    },\n"
+    + "      })\n"
+    + "      await writeFile(join(buildPaths.root, 'installer-ui', 'strings.nsh'), renderInstallerStrings(readInstallerLocales()), 'utf8')\n"
+    + "      return true\n    },\n"
     + "    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',\n"
     + "      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)\n")
 }
@@ -174,6 +176,27 @@ test('工具链补丁：两处编辑都能命中且幂等', () => {
     const builder = readFileSync(join(root, 'apps/desktop/scripts/electron-builder-config.mjs'), 'utf8')
     assert.ok(builder.includes('prepare-windows-installer.ps1'))
     assert.ok(builder.includes("env.DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN !== '1'"))
+    // strings.nsh 必须在同一个 if 里：prepare 被跳过时 installer-ui 目录根本不存在，
+    // 留在外面就是 ENOENT（CI run 202 的 desktop job 正是这样炸的）。
+    const guarded = builder.slice(builder.indexOf("if (env.DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN !== '1') {"))
+    const body = guarded.slice(0, guarded.indexOf('\n      }\n'))
+    assert.ok(body.includes('strings.nsh'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('工具链补丁：只包了 prepare 的旧形态能就地升级（补上 strings.nsh）', () => {
+  const root = makeTree()
+  try {
+    patchElectronBuilderEmbed(root)
+    const path = join(root, 'apps/desktop/scripts/electron-builder-config.mjs')
+    // 还原成上游 9ce74cda 之前的形态：prepare 已被旧补丁包住，strings.nsh 仍在 if 外。
+    const strings = "      await writeFile(join(buildPaths.root, 'installer-ui', 'strings.nsh'), renderInstallerStrings(readInstallerLocales()), 'utf8')\n"
+    writeFileSync(path, readFileSync(path, 'utf8').replace(strings + '      return true\n', '      return true\n')
+      .replace("      })\n      return true\n", "      })\n" + strings + '      return true\n'))
+    const { applied } = patchDesktopToolchain(root)
+    assert.ok(applied.length >= 1)
+    const body = readFileSync(path, 'utf8')
+    assert.ok(body.includes(TOOLCHAIN_EDITS[1].to))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
