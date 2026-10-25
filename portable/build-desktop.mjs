@@ -191,6 +191,10 @@ function main() {
       DSH_DESKTOP_SKIP_INSTALLER_TOOLCHAIN: '1',
       // P1 已打在当前 lib 上，禁止打包流程内部重建把它们覆盖掉。
       DSH_DESKTOP_SKIP_INTERNAL_BUILD: '1',
+      // 上游 0.2.1 起 unsigned 打包会自己跑 build --profile local（本地品牌），随后
+      // pack-local-packages.ts 又拿 'local' 去校验构建记录。我们的绿色包仍是 DeepSeek Harness，
+      // 构建记录是 official 的 —— 让那一步读我们真实用的 profile，否则必然对不上。
+      DSH_BUILD_CLIENT_PROFILE: 'official',
     }
     if (process.env.DSH_DESKTOP_RUN_PACKAGED_SMOKE !== '1') packageEnv.DSH_DESKTOP_SKIP_PACKAGED_SMOKE = '1'
     const pack = pnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'run', 'package:win:x64:unsigned', '--', '--dir'])
