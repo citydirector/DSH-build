@@ -62,6 +62,8 @@ function smokePluginRefresh() {
     '--home', home, '--runtime', join(STAGE, 'resources', 'app.asar', 'dsh'), '--out', join(home, 'plan.json'),
   ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 60_000 })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
+  const profileMigrator = join(STAGE, 'resources', 'dsh-build', 'migrate-profiles.mjs')
+  if (!existsSync(profileMigrator)) log('assemble', 'WARN resources/dsh-build/migrate-profiles.mjs 没随包，启动期配置迁移会静默失效')
   const compatTarget = join(STAGE, 'resources', 'dsh-build', 'lib', 'profile-compat.mjs')
   if (!existsSync(compatTarget)) log('assemble', 'WARN resources/dsh-build/lib/profile-compat.mjs 没随包，更新期配置迁移会失效')
   if (result.status === 0) log('assemble', 'plugin-refresh 冒烟通过（asar 运行时可解析）')
@@ -233,6 +235,9 @@ function main() {
   else log('assemble', 'WARN migrator missing; the portable bootstrap will skip session migration')
   // 插件随版本刷新：update.exe 覆盖前后以 Electron 作 node 调用它（见 plugin-refresh.mjs 头注释）。
   cpSync(join(HERE, 'plugin-refresh.mjs'), join(migratorTarget, 'plugin-refresh.mjs'))
+  // 启动期的 profile 配置迁移：dsh-portable-bootstrap.ts 在首次以新版本启动时用
+  // ELECTRON_RUN_AS_NODE 调它。它和 plugin-refresh 共用 lib/profile-compat.mjs。
+  cpSync(join(HERE, 'migrate-profiles.mjs'), join(migratorTarget, 'migrate-profiles.mjs'))
   // plugin-refresh.mjs 里 `import './lib/profile-compat.mjs'` 是相对路径 —— lib 目录不随包，更新会在
   // 迁移那一步抛 ERR_MODULE_NOT_FOUND（被 try/catch 降级成 warning，但迁移就永远不生效了）。
   mkdirSync(join(migratorTarget, 'lib'), { recursive: true })

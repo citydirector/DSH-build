@@ -8,8 +8,8 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import {
-  applyPlan, blockedOf, buildPlan, formatPlan, isRegistrySpec, loadRuntime, migrateProfiles, parseNpmrc, pickTarget,
-  homeForMigration, registryFor, runtimeFromCli, unmetDshPeers, upgradesOf,
+  applyPlan, blockedOf, buildPlan, formatPlan, isRegistrySpec, loadRuntime, parseNpmrc, pickTarget,
+  registryFor, unmetDshPeers, upgradesOf,
 } from '../portable/plugin-refresh.mjs'
 
 const require = createRequire(import.meta.url)
@@ -198,64 +198,4 @@ test('loadRuntime reads the version and semver from the runtime itself', () => {
   writeFileSync(join(desktop, 'node_modules', 'semver', 'index.js'), 'module.exports = { valid: v => v }')
   assert.equal(loadRuntime(desktop).version, '0.2.2')
   assert.throws(() => loadRuntime(join(root, 'nowhere')), /不是 dsh 运行时目录/)
-})
-
-test('migrateProfiles never throws, even when the home has nothing to read', () => {
-  // 迁移接在更新流程里，任何一步炸都不能把更新拦住 —— 认不出的 home / 运行时必须是「警告」而不是异常。
-  const home = mkdtempSync(join(tmpdir(), 'plugin-migrate-'))
-  assert.deepEqual(migrateProfiles({ home, runtime: join(home, 'nowhere') }), [])
-  const empty = migrateProfiles({ home: undefined, runtime: join(home, 'nowhere') })
-  assert.ok(Array.isArray(empty))
-})
-
-test('the config migrates against the runtime the CLI will actually boot', () => {
-  // 更新期只跑一次迁移，且必须用**已经就位的新运行时**做判据。这里不走子进程（本机沙箱起不来），
-  // 直接串 runtimeFromCli → migrateProfiles，覆盖 apply 分支里那两步的接缝。
-  const root = mkdtempSync(join(tmpdir(), 'plugin-apply-migrate-'))
-  const home = join(root, 'data')
-  const profileDir = join(home, 'profiles', 'desktop')
-  mkdirSync(profileDir, { recursive: true })
-  writeJson(join(profileDir, 'package.json'), { name: 'dsh-profile-desktop', private: true })
-  writeFileSync(join(profileDir, 'cordis.patch.yml'), [
-    '- id: tool-subagent-list-agents',
-    "  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'",
-    '',
-    '- id: tool-subagent',
-    "  name: '@deepseek-ai/dsh-tool-subagent'",
-    '  config:',
-    '    modelSelectionSettings: true',
-    '',
-  ].join('\n'))
-
-  // 便携版布局：CLI 是 app/dsh-plugin-cli.mjs，运行时就是 app/
-  const runtime = join(root, 'app')
-  writeJson(join(runtime, 'package.json'), { name: '@deepseek-ai/dsh', version: NEW })
-  const pkg = (name, body) => writeJson(join(runtime, 'node_modules', name, 'package.json'), body)
-  pkg('@deepseek-ai/dsh-app-boot', { name: '@deepseek-ai/dsh-app-boot', version: NEW, exports: { './package.json': './package.json' } })
-  // 新版把 list_agents 并进主入口：子路径没有了
-  pkg('@deepseek-ai/dsh-tool-subagent-control', { name: '@deepseek-ai/dsh-tool-subagent-control', exports: { '.': './lib/index.js' } })
-  // 新版子智能体只认 modelSelection / modelDiscovery
-  pkg('@deepseek-ai/dsh-tool-subagent', { name: '@deepseek-ai/dsh-tool-subagent', main: 'lib/index.js' })
-  mkdirSync(join(runtime, 'node_modules', '@deepseek-ai', 'dsh-tool-subagent', 'lib'), { recursive: true })
-  writeFileSync(join(runtime, 'node_modules', '@deepseek-ai', 'dsh-tool-subagent', 'lib', 'index.js'),
-    'const Config = z.object({ modelSelection: z.boolean(), modelDiscovery: z.boolean() })')
-
-  const cli = [join(runtime, 'dsh-plugin-cli.mjs')]
-  assert.equal(runtimeFromCli(cli), runtime)
-  const [report] = migrateProfiles({ home, runtime: runtimeFromCli(cli) })
-  assert.equal(report.profile, 'desktop')
-  assert.equal(report.warnings.length, 0, JSON.stringify(report.warnings))
-  const after = readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')
-  assert.ok(!after.includes('list-agents'), '新运行时没有这条子路径，整块该被删掉')
-  assert.match(after, /modelSelection: true/u)
-  assert.match(after, /modelDiscovery: true/u)
-})
-
-test('homeForMigration prefers DSH_HOME and falls back to the plan location', () => {
-  // update.exe 会设 DSH_HOME；直接跑 CLI 时没有，得靠 plan 的位置反推（plan 落在 <home>/.update/ 下）。
-  assert.equal(homeForMigration('D:/x/data/.update/plugin-plan.json', { DSH_HOME: 'D:/explicit' }), 'D:/explicit')
-  // resolve 会把分隔符统一成本平台的形态，期望值跟着走，别写死。
-  assert.equal(homeForMigration('D:/x/data/.update/plugin-plan.json', {}), resolve('D:/x/data'))
-  assert.equal(homeForMigration(undefined, {}), undefined)
-  assert.equal(homeForMigration('', {}), undefined)
 })

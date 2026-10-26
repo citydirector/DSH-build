@@ -1,9 +1,12 @@
 // dsh 便携版启动器（C# 5.0，.NET Framework 4.8 的 csc 编译）
 // 职责：定位自身目录 → 设 DSH_HOME=程序目录\data（绿色，不写 ~/.dsh）→ 把 node 加进 PATH
 //       → XDG_* 指到 data\xdg\（遵循 XDG 的插件如 billion-context 不再写 C 盘用户目录）
-//       → 首次以新版本启动时跑一次会话代际迁移（app\migrate-sessions-v4.mjs）→ 运行 node bin.js
+//       → 首次以新版本启动时跑一次会话代际迁移（app\migrate-sessions-v4.mjs）
+//       → 同样在首次以新版本启动时，把 data\profiles\*\cordis.patch.yml 迁到本版本的口径上
+//         （app\migrate-profiles.mjs）→ 运行 node bin.js
 // 无参数时默认启动 web 模式，并自动打开浏览器。
 // 子命令：--migrate-sessions 只跑会话代际迁移、不启动 dsh（迁移有失败项后的手动重跑入口）。
+//       --migrate-profiles 只跑 profile 配置迁移、不启动 dsh（同上，手动重跑入口）。
 //       plugin ...：改走 app\dsh-plugin-cli.mjs，把随包 pnpm 交给上游 CLI（否则要求 PATH 上有 pnpm）。
 
 using System;
@@ -102,8 +105,23 @@ class DshLauncher
             return migrateCode;
         }
 
+        // --migrate-profiles：只跑 profile 配置迁移、不启动 dsh（与上面同理的手动重跑入口）
+        if (HasFlag(args, "--migrate-profiles"))
+        {
+            Console.WriteLine("仅执行 profile 配置迁移（不启动 dsh）。");
+            int profileCode = RunProfileMigration(baseDir, nodeExe, dataDir, true);
+            if (profileCode == 2) profileCode = 0;
+            PauseBeforeExit();
+            return profileCode;
+        }
+
         // 首次以新版本启动时，一次性把本地 v2/v3 会话补迁移到 v4（失败不阻断启动）
         RunSessionMigration(baseDir, nodeExe, dataDir, false);
+
+        // 同一个位置、同一个口径：把 profile 配置迁到本版本的认识上。
+        // 放在会话迁移之后纯粹是历史顺序，两者互不依赖（一个动 sessions，一个动 profiles）。
+        // 必须在这里而不是 update.exe 里做：那时新程序还没落地，判据用的不是将要运行的这一份。
+        RunProfileMigration(baseDir, nodeExe, dataDir, false);
 
         bool autoWeb = args.Length == 0;
 
@@ -356,6 +374,80 @@ class DshLauncher
         catch (Exception ex)
         {
             Console.Error.WriteLine("会话迁移器启动失败：" + ex.Message);
+            return 1;
+        }
+    }
+
+    // ── profile 配置迁移 ─────────────────────────────────────────────────────
+    // 上游改一个 config 键名、删一条子路径导出，用户手写的 cordis.patch.yml 就会 import 失败，
+    // 预设整组挂不上 → 建不了会话（现象：预设显示加载失败、会话输入不可用、标题退化成 session-xxx）。
+    // 迁移器是随包分发的 app\migrate-profiles.mjs，判据全部问本版本自己的运行时（见
+    // app\lib\profile-compat.mjs 头注释），所以不需要版本对照表。
+    // 返回：0 成功；1 有 profile 迁移失败；2 跳过（无需迁移 / 已跑过 / 被禁用 / 缺迁移器）。
+    static int RunProfileMigration(string baseDir, string nodeExe, string dataDir, bool force)
+    {
+        string migrator = Path.Combine(baseDir, "app", "migrate-profiles.mjs");
+
+        if (!force && Environment.GetEnvironmentVariable("DSH_SKIP_PROFILE_MIGRATION") == "1")
+            return 2;
+        if (!File.Exists(migrator))
+        {
+            if (force) Console.Error.WriteLine("未找到 profile 迁移器：" + migrator);
+            return 2;
+        }
+
+        string version = "unknown";
+        string versionFile = Path.Combine(baseDir, "VERSION");
+        if (File.Exists(versionFile))
+        {
+            string read = File.ReadAllText(versionFile).Trim();
+            if (read.Length > 0) version = read;
+        }
+
+        string markerDir = Path.Combine(dataDir, ".migrations");
+        string doneMarker = Path.Combine(markerDir, "profile-compat-" + version + ".done");
+        if (!force && File.Exists(doneMarker))
+            return 2;   // 本版本已处理过：静默跳过
+
+        // 没有 profiles 目录 = 还没建过任何会话，没什么可迁的（也不该为它建目录）。
+        string profilesDir = Path.Combine(dataDir, "profiles");
+        if (!Directory.Exists(profilesDir))
+        {
+            if (force) Console.WriteLine("没有 profile 目录（" + profilesDir + "），无需迁移。");
+            return 2;
+        }
+
+        try { Directory.CreateDirectory(markerDir); } catch { }
+
+        ProcessStartInfo psi = new ProcessStartInfo();
+        psi.FileName = nodeExe;
+        // 运行时就传 app\ 本身：迁移器据此 resolve 随包的 @deepseek-ai/*。
+        psi.Arguments = Quote(migrator) + " --home " + Quote(dataDir) + " --runtime " + Quote(Path.Combine(baseDir, "app"));
+        psi.WorkingDirectory = Path.Combine(baseDir, "app");
+        psi.UseShellExecute = false;
+        psi.EnvironmentVariables["DSH_HOME"] = dataDir;
+        try
+        {
+            Process proc = Process.Start(psi);
+            if (!proc.WaitForExit(5 * 60 * 1000))
+            {
+                try { proc.Kill(); } catch { }
+                Console.Error.WriteLine("profile 配置迁移超时（5 分钟），已中止；配置保持原样。");
+                return 1;
+            }
+            if (proc.ExitCode == 0)
+            {
+                try { File.WriteAllText(doneMarker, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + " " + version); } catch { }
+                return 0;
+            }
+            // 失败不写 done 标记：下一个版本、或手动 --migrate-profiles 还能再试一次。
+            Console.Error.WriteLine("profile 配置迁移有未完成项（退出码 " + proc.ExitCode + "）。本次继续启动，未迁移的配置保持原样。");
+            Console.Error.WriteLine("排除原因后可手动重跑：dsh.exe --migrate-profiles");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("profile 迁移器启动失败：" + ex.Message);
             return 1;
         }
     }
