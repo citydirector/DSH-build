@@ -13,8 +13,12 @@
 // 插件随版本刷新（新包带 plugin-refresh.mjs 时生效）：
 //   覆盖前：用**新包自己的** node/Electron 跑 `plugin-refresh.mjs check`，列出对新运行时不兼容的插件
 //           及能升到的版本；有插件找不到兼容版本时提示（N 取消，其它键或 10 秒后继续）。
+//           **只读**：这一步不碰用户的 profile 配置。
 //   覆盖后：apply-update.cmd 末尾跑 `plugin-refresh.mjs apply`，逐个调用官方
-//           `dsh plugin --profile <p> add <name>@<version>`（上游做兼容门禁，失败自动回滚）。
+//           `dsh plugin --profile <p> add <name>@<version>`（上游做兼容门禁，失败自动回滚），
+//           并把 profile 的 cordis.patch.yml 按新运行时的能力迁移一遍（见 lib/profile-compat.mjs）。
+//           迁移放在覆盖之后是有意的：改配置与换程序属于同一次更新，若在覆盖前就改，
+//           一旦更新中止（进程没关、用户按 N），旧程序会带着新配置跑，预设当场挂不上。
 //   手动：update.exe --plugins 把所有插件升到兼容当前运行时的最新版本（不检查 dsh 本体更新）。
 
 using System;
@@ -61,6 +65,15 @@ class DshUpdater
             Console.WriteLine("包身份: " + manifest.Kind + "（资产前缀 " + (manifest.AssetPrefix == "" ? "dsh-portable-win64" : manifest.AssetPrefix) + "）");
         }
         if (HasArg("--plugins")) return RunPluginMaintenance(baseDir, manifest);
+
+        // 进程检查必须排在任何改动之前。插件兼容预检会按**新包**的能力改 profile 配置
+        // （删掉新版已删除的子路径、换掉被弃用的执行器）—— 若此时 dsh 还在跑，用户只能中止更新，
+        // 版本停在旧的、配置却已按新版改过，正在运行的这一份会当场坏掉：预设挂不上、工具消失。
+        if (IsDshRunning(baseDir, manifest))
+        {
+            Console.Error.WriteLine("检测到 " + (manifest == null ? "dsh" : manifest.Kind) + " 正在运行，请先关闭再执行更新。");
+            return 1;
+        }
 
         string versionFile = Path.Combine(baseDir, manifest == null ? "VERSION" : manifest.VersionFile);
         string current = File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "";
@@ -164,12 +177,6 @@ class DshUpdater
             }
             refreshPlugins = (check == 0 || check == 3) && File.Exists(pluginPlan);
             if (!refreshPlugins) Console.WriteLine("插件兼容检查未完成（不影响本次更新），插件将保持原样。");
-        }
-
-        if (IsDshRunning(baseDir, manifest))
-        {
-            Console.Error.WriteLine("检测到 " + (manifest == null ? "dsh" : manifest.Kind) + " 正在运行，请先关闭再执行更新。");
-            return 1;
         }
 
         // 更新前备份旧版本（app/node/启动器/版本/更新器），出问题可回滚
