@@ -162,16 +162,75 @@ function migrateModelSelection(lines, changes) {
   return out
 }
 
-/** 删掉当前运行时的包已经不认的 config 键（逐行）。 */
+/**
+ * 删掉当前运行时的包已经不认的 config 键（逐行）。
+ *
+ * 序列项有两种写法：`- key: value`（标记与首键同行）和 `-` 独占一行。前者被删掉首键时，
+ * 标记会跟着一起去见上帝，剩下的兄弟键就掉进上一层的映射里 —— 上游 schema 于是报
+ * `expected array but got [object Object]`，整个插件起不来。所以删掉带标记的首行时，
+ * 必须把 `- ` 转交给下一个兄弟键。
+ */
+/**
+ * 修好「整块一个序列标记都没有」的 models 块。
+ *
+ * 旧版 dropDeadKeys 删掉 "- imagePixelBudget: 640000" 整行时把 "- " 一起带走了，
+ * models 于是从数组塌成映射，上游报 "expected array but got [object Object]"。
+ * 只动「整块没有任何 "- "」的块 —— 那正是我们自己的迁移造出来的形态；
+ * 手工写成映射的配置本来就不合法，交给上游自己去报错。
+ */
+function repairLostSequenceMarks(lines, range, changes) {
+  const out = lines.slice()
+  for (let index = range.start; index < out.length && index < range.end; index++) {
+    const head = /^([ \t]*)models:[ \t]*$/u.exec(out[index])
+    if (head === null) continue
+    const childIndent = head[1] + '  '
+    let end = index + 1
+    let marked = false
+    let first
+    while (end < out.length && end < range.end) {
+      const line = out[end]
+      if (line.trim() === '' || !line.startsWith(childIndent)) break
+      // 只看 models 的直接子键：input: 下面的 "- text" 也是列表项，但它缩进更深，
+      // 不能拿来证明 models 自己是数组（这正是第一版漏判的原因）。
+      const indentLength = line.length - line.trimStart().length
+      if (indentLength === childIndent.length) {
+        if (/^[ \t]*-[ \t]/u.test(line)) marked = true
+        if (first === undefined) first = end
+      }
+      end++
+    }
+    // 没坏（本来就有标记），或者块是空的（没有内容行要修）
+    if (marked || first === undefined) continue
+    out[first] = head[1] + '- ' + out[first].slice(childIndent.length)
+    changes.push({ kind: 'model-list', detail: '补回 models 的序列标记（旧版迁移删首键时把 "- " 一起带走了）' })
+    index = end - 1
+  }
+  return out
+}
 function dropDeadKeys(lines, keys, changes) {
   const out = []
+  /** 被删的 `- key: value` 留下的列表标记缩进，等着转交给下一个兄弟键。 */
+  let orphan
   for (const line of lines) {
     const hit = keys.find((key) => rowKey(line, key) !== undefined)
-    if (hit === undefined) {
-      out.push(line)
+    if (hit !== undefined) {
+      changes.push({ kind: 'dead-key', detail: '删除 ' + hit + '（当前运行时的包不认这个字段）' })
+      const dash = /^([ \t]*)-[ \t]/u.exec(line)
+      if (dash !== null) orphan = dash[1]
       continue
     }
-    changes.push({ kind: 'dead-key', detail: '删除 ' + hit + '（当前运行时的包不认这个字段）' })
+    if (orphan !== undefined) {
+      const rest = line.slice(orphan.length)
+      // 兄弟键：缩进比标记更深（`  ` + 首键列），自己又不带标记 —— 正好接住这枚标记。
+      if (rest.trim() !== '' && rest.startsWith('  ') && !/^[ \t]*-[ \t]/u.test(rest)) {
+        out.push(orphan + '- ' + rest.trimStart())
+        orphan = undefined
+        continue
+      }
+      // 元素到这里就结束了（空行或退回上一层），标记无处安放，只能丢掉
+      orphan = undefined
+    }
+    out.push(line)
   }
   return out
 }
@@ -265,6 +324,9 @@ export function migratePatchText(text, runtime) {
       const body = dropDeadKeys(current.slice(piAiRange.start, piAiRange.end), dead, changes)
       current = head.concat(body, current.slice(piAiRange.end))
     }
+    // 旧版迁移可能已经把配置写坏了（models 塌成映射），这里顺手修回来
+    const afterCleanup = sectionRange(current, 'llm-pi-ai')
+    if (afterCleanup !== undefined) current = repairLostSequenceMarks(current, afterCleanup, changes)
   }
 
   // ── 4. tool-presentation → tool-executor-ptc ──────────────────────────────────
