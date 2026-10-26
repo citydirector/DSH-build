@@ -9,6 +9,12 @@
  * plugins stay inside the package too, and refreshes `process.env` from the
  * Windows per-user environment registry key (see `dsh-user-environment.ts`) so a
  * value the user changed after logon is visible without a restart.
+ *
+ * Two one-shot migrations run here, both keyed on the packaged VERSION so a new
+ * package runs them exactly once: the session generation upgrade, and the profile
+ * configuration migration. The latter used to live in update.exe's plugin preflight,
+ * which meant a failed preflight silently left the old configuration behind and the
+ * freshly installed runtime then failed to mount its presets.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -124,6 +130,41 @@ function migrateSessionsOnce(dataRoot: string, exeDirectory: string): boolean {
 }
 
 /**
+ * Migrate every profile's cordis.patch.yml onto the packaged runtime's own vocabulary.
+ *
+ * Upstream renames config keys and drops subpath exports between versions, and the
+ * profiles under `data/profiles` are hand-written files that do not travel with a
+ * package. When they lag behind, mounting a preset throws — and a runtime without a
+ * mounted preset cannot create a session at all, which is what the broken dev upgrade
+ * looked like. Doing it here, after the new package is in place, means the runtime
+ * doing the judging is the one that will actually boot, and one launch is enough.
+ *
+ * Failures never block startup: the migrator reports per-profile problems and this
+ * function only records a marker on success.
+ */
+function migrateProfilesOnce(dataRoot: string, exeDirectory: string): boolean {
+  const version = readVersion(exeDirectory)
+  const markerDirectory = join(dataRoot, MIGRATION_MARKER_DIRECTORY)
+  const marker = join(markerDirectory, `profile-compat-${version}.done`)
+  if (existsSync(marker)) return false
+  const migrator = join(process.resourcesPath, 'dsh-build', 'migrate-profiles.mjs')
+  if (!existsSync(migrator)) return false
+  const runtimeDirectory = join(process.resourcesPath, 'app.asar', 'dsh')
+  if (!existsSync(runtimeDirectory)) return false
+  const result = spawnSync(process.execPath, [migrator, '--home', dataRoot, '--runtime', runtimeDirectory], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: dataRoot },
+    stdio: 'inherit',
+  })
+  mkdirSync(markerDirectory, { recursive: true })
+  if (result.status !== 0) {
+    console.error(`portable bootstrap: profile migration exited with status ${String(result.status)}`)
+    return false
+  }
+  writeFileSync(marker, `${new Date().toISOString()}\n`)
+  return true
+}
+
+/**
  * Apply the portable layout when the package carries its marker file.
  *
  * The environment refresh runs first, before this module assigns anything of its
@@ -142,7 +183,8 @@ export function applyPortableBootstrap(): PortableBootstrapResult {
   redirectXdgPaths(dataRoot)
   pinPluginNodeRuntime()
   const migrationRan = migrateSessionsOnce(dataRoot, exeDirectory)
-  console.info(`portable bootstrap: data root ${dataRoot} (environment refreshed: ${refreshed})${migrationRan ? ' (session migration ran)' : ''}`)
+  const profilesMigrated = migrateProfilesOnce(dataRoot, exeDirectory)
+  console.info(`portable bootstrap: data root ${dataRoot} (environment refreshed: ${refreshed})${migrationRan ? ' (session migration ran)' : ''}${profilesMigrated ? ' (profile migration ran)' : ''}`)
   return { portable: true, dataRoot, migrationRan }
 }
 
