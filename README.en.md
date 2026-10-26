@@ -36,6 +36,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 | **Plugins follow the runtime** | Before replacing files, checks profile plugins against the new runtime and finds compatible versions for the ones it would break; afterwards upgrades them through the official `dsh plugin add`, which rolls back on failure | 🟢🔵 | `plugin-refresh.mjs` · `dsh-updater.cs` |
 | Manual plugin update | `update.exe --plugins` moves every plugin to its newest compatible version | 🟢🔵 | same |
 | `dsh plugin` works in portable | Upstream's CLI expects pnpm on PATH; the portable package only had node, so `dsh plugin` always failed with "pnpm was not found". It now ships pnpm (upstream's version) | 🟢 | `dsh-plugin-cli.mjs` · `assemble-runtime.ps1` |
+| No "new version available" nag from pnpm | The bundled pnpm's update-notifier phones home after `install` / `add` and suggests upgrading, but the shipped version is pinned to upstream and must not be bumped on its own (`12.x` fails `pnpm run` inside the workspace). Both pnpm entry points — portable `dsh plugin` and the desktop plugin panel — set `PNPM_CONFIG_UPDATE_NOTIFIER=false` | 🟢🔵 | `dsh-plugin-cli.mjs` · `patch-desktop-pnpm-notifier.mjs` (source) |
 | Session migration v2/v3 → v4 | Upstream's migrator bundled into one file, run once per version on first start; skipped in milliseconds when everything is already v4 | 🟢🔵 | `build-migrator.mjs` · `dsh-launcher.cs` |
 
 ### 3. Official features, bundled
@@ -70,7 +71,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 
 ```mermaid
 flowchart LR
-  U[Upstream source] --> S[Source patches<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools / acl]
+  U[Upstream source] --> S[Source patches<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl]
   S --> B[build:official]
   B --> L[Built patches<br/>native-code / tool-schema<br/>session-lock]
   L --> M[Migrator + plugin-refresh]
@@ -149,7 +150,7 @@ Close dsh, then run `update.exe`:
 - The channels differ only in where the upstream commit comes from; the glue is byte-identical. Scheduled runs skip only when both the upstream commit and the glue fingerprint are unchanged; manual runs always build.
 - Promote by merging `dev` into `main`. Builds on one channel queue, so they never delete each other's release.
 - Pipeline `.github/workflows/build-harness.yml`: `check` → `npm` / `portable` / `desktop` → `release` → `notify-failure`. The workflow only orchestrates; the logic lives in `ci/` and runs locally too.
-- pnpm is pinned by `PNPM_VERSION` (11.27.1): 11.7.0 has a hoisting bug ([pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)) and 12.x fails `pnpm run` inside the workspace.
+- pnpm is not pinned by hand: `ci/align-package-manager.mjs` reads the upstream root `package.json`'s `devDependencies.pnpm` (Desktop's `primary-runtime` pnpm is copied from exactly that entry, so the build-time pnpm equals the shipped one), checks it against the forbidden range, and passes it to `pnpm/action-setup` through `$GITHUB_OUTPUT`. Forbidden: `<11.7.1` (hoisting bug, [pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)) and `12.x` (fails `pnpm run` inside the workspace). Set `PNPM_VERSION` only to pin in an emergency — the script then warns that the build-time pnpm differs from the shipped one.
 - Manual run: Actions → **Build DSH** → `Run workflow`, `channel` = `auto` / `main` / `dev`.
 - ⚠️ Don't pin anything older than 0.1.7: those versions have no v3/v4 session codecs.
 

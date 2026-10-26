@@ -36,6 +36,7 @@
 | **插件跟着版本走** | 覆盖前用新运行时检查 profile 插件，给不兼容的插件找到兼容版本；覆盖后用官方 `dsh plugin add` 逐个升级，失败的由上游自动回滚 | 🟢🔵 | `plugin-refresh.mjs` · `dsh-updater.cs` |
 | 手动更新插件 | `update.exe --plugins`：把所有插件升到兼容当前版本的最新版 | 🟢🔵 | 同上 |
 | 便携版 `dsh plugin` 可用 | 上游 CLI 要求 PATH 上有 pnpm，便携版只带 node，所以 `dsh plugin` 一直报 "pnpm was not found"。现在随包带 pnpm（与上游同版本） | 🟢 | `dsh-plugin-cli.mjs` · `assemble-runtime.ps1` |
+| 不再提示 pnpm 可升级 | 随包 pnpm 自带的 update-notifier 会在 `install` / `add` 后联网比对并提示升级，但随包版本跟上游钉死、不该被单方面顶掉（`12.x` 在工作区里跑 `pnpm run` 会失败）。两条 pnpm 入口——便携版 `dsh plugin` 与桌面端插件面板——都用 `PNPM_CONFIG_UPDATE_NOTIFIER=false` 关掉 | 🟢🔵 | `dsh-plugin-cli.mjs` · `patch-desktop-pnpm-notifier.mjs`（源码） |
 | 会话格式自动迁移 v2/v3 → v4 | 把上游迁移脚本打成单文件随包分发，每个版本首次启动跑一次；已全部是 v4 时毫秒级跳过 | 🟢🔵 | `build-migrator.mjs` · `dsh-launcher.cs` |
 
 ### 3. 官方功能补全（随包发行）
@@ -70,7 +71,7 @@
 
 ```mermaid
 flowchart LR
-  U[上游源码] --> S[源码补丁<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools / acl]
+  U[上游源码] --> S[源码补丁<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl]
   S --> B[build:official]
   B --> L[产物补丁<br/>native-code / tool-schema<br/>session-lock]
   L --> M[迁移器 + plugin-refresh]
@@ -149,7 +150,7 @@ dsh-portable/
 - 两个通道只差上游提交的来源，胶水逐字节相同。自动触发时，上游提交和胶水指纹都没变才跳过；手动触发一律构建。
 - 晋升：把 `dev` 合进 `main`。同一通道的构建会排队串行，不会互相删 release。
 - 流水线 `.github/workflows/build-harness.yml`：`check` → `npm` / `portable` / `desktop` → `release` → `notify-failure`。workflow 只做编排，逻辑在 `ci/` 下，可以本地单独跑。
-- pnpm 固定为 `PNPM_VERSION`（11.27.1）：11.7.0 有 hoisted 缺陷（[pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)），12.x 在工作区跑 `pnpm run` 会失败。
+- pnpm 版本不手写：`ci/align-package-manager.mjs` 读上游根 `package.json` 的 `devDependencies.pnpm`（桌面版 `primary-runtime` 里的 pnpm 正是从这份拷进去的，所以构建用的 pnpm 恒等于随包那份），校验禁区后经 `$GITHUB_OUTPUT` 交给 `pnpm/action-setup`。禁区：`<11.7.1` 有 hoisted 缺陷（[pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)），`12.x` 在工作区跑 `pnpm run` 会失败。只有紧急钉版时才设 `PNPM_VERSION` 覆盖（脚本会警告：那会让构建用的 pnpm 与随包的不同版本）。
 - 手动触发：Actions → **Build DSH** → `Run workflow`，`channel` 选 `auto` / `main` / `dev`。
 - ⚠️ 别把 pin 退回 0.1.7 之前：那些版本没有 v3/v4 会话编解码。
 
