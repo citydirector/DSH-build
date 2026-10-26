@@ -259,6 +259,7 @@ export function applyPlan(plan, cli, run) {
  */
 export function migrateProfiles({ home, runtime, profiles }) {
   // 这一整层绝不能把更新拦住：任何一步出问题都退化成警告，让更新照常做完。
+  // profiles 缺省时 listProfiles 可能自己抛 —— 它也在 try 里，否则整段降级就落空了。
   let wanted = []
   let runtime$
   try {
@@ -291,18 +292,27 @@ export function runtimeFromCli(cli) {
     if (typeof argument !== 'string' || !/\.(?:mjs|cjs|js)$/u.test(argument)) continue
     let directory = dirname(resolve(argument))
     for (let depth = 0; depth < 10; depth++) {
-      const manifest = join(directory, 'package.json')
-      if (existsSync(manifest)) {
-        try {
-          if (readJson(manifest).name === '@deepseek-ai/dsh') return directory
-        } catch { /* 读不了就继续往上找 */ }
-      }
+      if (isRuntimeRoot(directory)) return directory
       const parent = dirname(directory)
       if (parent === directory) break
       directory = parent
     }
   }
   return undefined
+}
+
+/**
+ * 这个目录是不是 dsh 运行时根 —— 和 loadRuntime 的锚点保持一致。
+ * 不能只看 package.json 的 name：桌面版的运行时根叫 @deepseek-ai/dsh-desktop-runtime，
+ * 不是 @deepseek-ai/dsh，只按名字找会让 apply 兜底对桌面版整个失效。
+ */
+function isRuntimeRoot(directory) {
+  const manifest = join(directory, 'package.json')
+  if (!existsSync(manifest)) return false
+  try {
+    if (readJson(manifest).name === '@deepseek-ai/dsh') return true
+  } catch { /* 读不了就看下一个锚点 */ }
+  return existsSync(join(directory, 'node_modules', '@deepseek-ai', 'dsh-app-boot', 'package.json'))
 }
 
 /** 从运行时目录解析 app-boot（取版本）与它所用的 semver。 */
@@ -350,6 +360,25 @@ function parseArgs(argv) {
   return options
 }
 
+/** 打印一次迁移的结果；迁移失败只报警告，绝不拦住更新。 */
+/**
+ * 迁移要改的那棵树（DSH_HOME）。update.exe 会设 DSH_HOME，但直接跑 CLI 时没有 ——
+ * plan 就写在 <home>/.update/ 下，从它的位置反推；两样都拿不到返回 undefined（调用方放弃迁移）。
+ */
+export function homeForMigration(planPath, env = process.env) {
+  const fromEnv = env.DSH_HOME
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+  if (typeof planPath !== 'string' || planPath === '') return undefined
+  const home = resolve(dirname(planPath), '..')
+  return home === '' ? undefined : home
+}
+function reportMigration(items) {
+  for (const item of items) {
+    for (const warning of item.warnings) console.log(`  [${item.profile}] 配置迁移未完成：${warning.detail}`)
+    for (const change of item.changes) console.log(`  [${item.profile}] 配置迁移：${change.detail}`)
+  }
+}
+
 async function main(argv) {
   const options = parseArgs(argv)
   if (options.command === 'check') {
@@ -359,13 +388,6 @@ async function main(argv) {
       home: options.home, runtimeVersion: version, semver, fetchPackument: fetchPackumentHttp, all: options.all,
       env: process.env, userNpmrc: readText(join(process.env.USERPROFILE ?? homedir(), '.npmrc')),
     })
-    // 配置文件也要跟着新运行时走：子路径被删、键被改名，都会让预设整组挂不上（见 lib/profile-compat.mjs）。
-    // 这一步与插件升级无关，只改 profile 里的 cordis.patch.yml，且判据全来自 options.runtime。
-    const migrated = migrateProfiles({ home: options.home, runtime: options.runtime })
-    for (const item of migrated) {
-      for (const warning of item.warnings) console.log(`  [${item.profile}] 配置迁移未完成：${warning.detail}`)
-      for (const change of item.changes) console.log(`  [${item.profile}] 配置迁移：${change.detail}`)
-    }
 
     writeFileSync(options.out, `${JSON.stringify(plan, undefined, 2)}\n`)
     const report = formatPlan(plan)
@@ -379,16 +401,21 @@ async function main(argv) {
   }
   if (options.command === 'apply') {
     if (!options.plan || options.cli.length === 0) throw new Error('用法：apply --plan <plan.json> -- <dsh CLI 命令...>')
-    // 兜底：check 时若没能迁移（例如插件检查失败提前返回），这里用刚就位的新运行时再试一次。
-    // 幂等，已迁移过就什么都不写。
+    // 配置迁移只在这里做 —— apply 跑在新程序已经就位之后，改配置与换程序是同一次更新的一部分。
+    // 放在 check 里做会错位：预检发生在覆盖之前，那时代码还是旧的，而配置已经按新版的判据改过；
+    // 一旦更新在覆盖前中止（进程没关、用户按 N），旧版本会带着新配置跑，预设当场挂不上。
+    // 幂等：已迁移过就什么都不写；DSH_HOME 缺省时用 plan 的位置反推（plan 就在 <home>/.update/ 下）。
+    const home = homeForMigration(options.plan)
     const runtimeDirectory = runtimeFromCli(options.cli)
-    if (runtimeDirectory !== undefined) {
-      const home = process.env.DSH_HOME
-      if (home !== undefined && home !== '') {
-        for (const item of migrateProfiles({ home, runtime: runtimeDirectory })) {
-          for (const change of item.changes) console.log(`  [${item.profile}] 配置迁移：${change.detail}`)
-        }
+    if (home !== undefined && home !== '' && runtimeDirectory !== undefined) {
+      // 迁移出任何意外都不许连累插件升级：它只是顺路改配置，插件才是这一步的正事。
+      try {
+        reportMigration(migrateProfiles({ home, runtime: runtimeDirectory }))
+      } catch (error) {
+        console.log(`  配置迁移失败（不影响插件升级）：${error instanceof Error ? error.message : String(error)}`)
       }
+    } else {
+      console.log('  配置迁移未执行：认不出 DSH_HOME 或运行时目录，profile 保持原样。')
     }
     if (!existsSync(options.plan)) return 0
     const plan = readJson(options.plan)
