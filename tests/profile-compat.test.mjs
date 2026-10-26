@@ -1,0 +1,243 @@
+// portable/lib/profile-compat.mjs 的单元测试（node:test，零依赖）。
+// 运行: node tests/profile-compat.test.mjs
+import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { createRuntime, migratePatchText, migrateProfile } from '../portable/lib/profile-compat.mjs'
+
+const SUBAGENT = '@deepseek-ai/dsh-tool-subagent'
+const PI_AI = '@deepseek-ai/dsh-llm-pi-ai'
+const PRESENTATION = '@deepseek-ai/dsh-agent-tool-presentation'
+const EXECUTOR_PTC = '@deepseek-ai/dsh-tool-executor-ptc'
+const LIST_AGENTS = '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+/** 假的运行时：resolvable 由集合决定，sourceOf 由 map 决定。 */
+function fakeRuntime({ resolvable = [], sources = {} } = {}) {
+  const set = new Set(resolvable)
+  return {
+    resolvable: specifier => set.has(specifier),
+    sourceOf: name => sources[name],
+  }
+}
+
+/** 稳定版运行时：列表里那条子路径在、executor-ptc 不在、presentation 还是真实实现。 */
+function stableRuntime() {
+  return fakeRuntime({
+    resolvable: [LIST_AGENTS],
+    sources: {
+      [SUBAGENT]: 'const Config = z.object({ modelSelection: z.boolean() })',
+      [PI_AI]: 'const modelFields = { name, contextWindow, maxTokens }',
+      [PRESENTATION]: 'function apply(ctx, config) { ctx.tools.presentAs(config.mode) }',
+    },
+  })
+}
+
+/** dev 运行时：子路径没了、executor-ptc 在、presentation 是弃用转发壳、pi-ai 不认图片预算。 */
+function devRuntime() {
+  return fakeRuntime({
+    resolvable: [EXECUTOR_PTC],
+    sources: {
+      [SUBAGENT]: 'const Config = z.object({ modelSelection: z.boolean(), modelDiscovery: z.boolean() })',
+      [PI_AI]: 'const modelFields = { name, contextWindow, maxTokens, input, reasoningEfforts, compat }',
+      [PRESENTATION]: '/** @deprecated mount the executor directly */ function apply(ctx, config) { ctx.plugin(config.mode === "native" ? Native : Ptc) }',
+    },
+  })
+}
+
+const DELEGATION_BLOCK = [
+  '- id: tool-subagent-control',
+  "  name: '@deepseek-ai/dsh-tool-subagent-control'",
+  '',
+  '- id: tool-subagent-list-agents',
+  "  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'",
+  '',
+  '- id: tool-subagent',
+  "  name: '@deepseek-ai/dsh-tool-subagent'",
+  '  config:',
+  '    provider: spawn',
+  '    modelSelectionSettings: true',
+  '',
+].join('\n')
+
+test('dev 运行时没有 /list-agents 子路径：整块被删，主入口行保留', () => {
+  const result = migratePatchText(DELEGATION_BLOCK, devRuntime())
+  assert.equal(result.text.includes('tool-subagent-list-agents'), false)
+  assert.equal(result.text.includes(LIST_AGENTS), false)
+  // 主入口与 tool-subagent 行必须还在（list_agents 功能由主入口自己注册）
+  assert.equal(result.text.includes('- id: tool-subagent-control'), true)
+  assert.equal(result.text.includes('- id: tool-subagent'), true)
+  assert.equal(result.changes.length, 2)
+  assert.deepEqual(result.changes.map(change => change.kind), ['list-agents', 'model-selection'])
+  assert.deepEqual(result.warnings, [])
+})
+
+test('stable 运行时有 /list-agents：那一行一个字节都不动', () => {
+  const result = migratePatchText(DELEGATION_BLOCK, stableRuntime())
+  assert.equal(result.text.includes(LIST_AGENTS), true)
+  assert.equal(result.changes.some(change => change.kind === 'list-agents'), false)
+})
+
+test('有子路径但配置里没这行：只报警告，不改', () => {
+  const text = ['- id: tool-subagent-control', "  name: '@deepseek-ai/dsh-tool-subagent-control'", ''].join('\n')
+  const result = migratePatchText(text, stableRuntime())
+  assert.equal(result.text, text)
+  assert.deepEqual(result.warnings.map(warning => warning.kind), ['list-agents'])
+})
+
+test('modelSelectionSettings 保留原行并补出 modelSelection / modelDiscovery', () => {
+  const result = migratePatchText(DELEGATION_BLOCK, stableRuntime())
+  assert.equal(result.text.includes('    modelSelectionSettings: true'), true)
+  assert.equal(result.text.includes('    modelSelection: true'), true)
+  assert.equal(result.text.includes('    modelDiscovery: true'), true)
+})
+
+test('三个键沿用原值，不是硬编码 true', () => {
+  const text = ['- id: tool-subagent', '  config:', '    modelSelectionSettings: false', ''].join('\n')
+  const result = migratePatchText(text, stableRuntime())
+  assert.equal(result.text.includes('    modelSelection: false'), true)
+  assert.equal(result.text.includes('    modelDiscovery: false'), true)
+})
+
+test('死键只在源码确实没有该词时删', () => {
+  const text = [
+    '- id: tool-subagent',
+    '  config:',
+    '    backgroundMode: continuable',
+    '    enableRunInBackground: false',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, stableRuntime())
+  assert.equal(result.text.includes('backgroundMode'), false)
+  assert.equal(result.text.includes('enableRunInBackground'), false)
+  assert.equal(result.changes.filter(change => change.kind === 'dead-key').length, 2)
+})
+
+test('源码里仍有该键时绝不删', () => {
+  const text = ['- id: tool-subagent', '  config:', '    backgroundMode: continuable', ''].join('\n')
+  const runtime = fakeRuntime({ resolvable: [LIST_AGENTS], sources: { [SUBAGENT]: 'backgroundMode: z.enum([...])' } })
+  const result = migratePatchText(text, runtime)
+  assert.equal(result.text.includes('backgroundMode: continuable'), true)
+  assert.deepEqual(result.changes, [])
+})
+
+test('读不到源码 = 判断不了，保留并回报', () => {
+  const text = ['- id: tool-subagent', '  config:', '    backgroundMode: continuable', ''].join('\n')
+  // resolvable 里不放 list-agents：这里只想验「源码读不到 = 不动」这一条
+  const result = migratePatchText(text, fakeRuntime({ resolvable: [] }))
+  assert.equal(result.text, text)
+  assert.deepEqual(result.warnings.map(warning => warning.kind), ['subagent'])
+})
+
+test('图片预算键只在 llm-pi-ai 段里删，别的段（llm-deepseek）不碰', () => {
+  const text = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      ollama:',
+    '        models:',
+    '          - imagePixelBudget: 640000',
+    '            imageMaxBytes: 1048576',
+    '            name: qwen',
+    '',
+    '- id: llm-deepseek',
+    '  config:',
+    '    models:',
+    '      - imagePixelBudget: 640000',
+    '        name: deepseek',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, devRuntime())
+  const lines = result.text.split('\n')
+  const piAi = lines.slice(0, lines.indexOf('- id: llm-deepseek')).join('\n')
+  const deepseek = lines.slice(lines.indexOf('- id: llm-deepseek')).join('\n')
+  assert.equal(piAi.includes('imagePixelBudget'), false)
+  assert.equal(piAi.includes('imageMaxBytes'), false)
+  assert.equal(piAi.includes('name: qwen'), true)
+  assert.equal(deepseek.includes('imagePixelBudget: 640000'), true)
+})
+
+test('stable 运行时（presentation 未弃用、executor-ptc 解析不到）不换 tool-presentation', () => {
+  const text = [
+    '- id: tool-presentation',
+    "  name: '@deepseek-ai/dsh-agent-tool-presentation'",
+    '  config:',
+    '    mode: ptc',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, stableRuntime())
+  assert.equal(result.text, text)
+})
+
+test('dev 运行时把 tool-presentation(mode: ptc) 换成 tool-executor-ptc', () => {
+  const text = [
+    '- id: tool-presentation',
+    "  name: '@deepseek-ai/dsh-agent-tool-presentation'",
+    '  config:',
+    '    mode: ptc',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, devRuntime())
+  assert.equal(result.text.includes('- id: tool-executor-ptc'), true)
+  assert.equal(result.text.includes("name: '" + EXECUTOR_PTC + "'"), true)
+  assert.equal(result.text.includes('tool-presentation'), false)
+  assert.equal(result.text.includes('mode: ptc'), false)
+})
+
+test('mode 不是 ptc 时不换（native 那条路仍由 presentation 转发）', () => {
+  const text = [
+    '- id: tool-presentation',
+    "  name: '@deepseek-ai/dsh-agent-tool-presentation'",
+    '  config:',
+    '    mode: native',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, devRuntime())
+  assert.equal(result.text, text)
+})
+
+test('迁移是幂等的：第二次跑一个字节都不改', () => {
+  const first = migratePatchText(DELEGATION_BLOCK, devRuntime())
+  const second = migratePatchText(first.text, devRuntime())
+  assert.equal(second.text, first.text)
+  assert.deepEqual(second.changes, [])
+})
+
+test('CRLF 文件迁移后仍是 CRLF', () => {
+  const text = DELEGATION_BLOCK.replaceAll('\n', '\r\n')
+  const result = migratePatchText(text, devRuntime())
+  assert.equal(result.text.includes('\r\n'), true)
+  assert.equal(/[^\r]\n/u.test(result.text), false)
+})
+
+test('migrateProfile：写盘、返回变更、二次调用不再写', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'profile-compat-'))
+  writeFileSync(join(dir, 'cordis.patch.yml'), DELEGATION_BLOCK)
+  const runtime = devRuntime()
+  const first = migrateProfile(dir, runtime)
+  assert.equal(first.changed, true)
+  assert.equal(first.file, join(dir, 'cordis.patch.yml'))
+  const written = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
+  assert.equal(written, migratePatchText(DELEGATION_BLOCK, runtime).text)
+  assert.equal(written.includes(LIST_AGENTS), false)
+  const second = migrateProfile(dir, runtime)
+  assert.equal(second.changed, false)
+  assert.deepEqual(second.changes, [])
+})
+
+test('migrateProfile：目录里没有 cordis.patch.yml 时安静返回', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'profile-compat-empty-'))
+  mkdirSync(join(dir, 'nothing'))
+  const result = migrateProfile(dir, devRuntime())
+  assert.equal(result.changed, false)
+  assert.deepEqual(result.changes, [])
+  assert.deepEqual(result.warnings, [])
+})
+
+test('createRuntime：解析不到的 specifier 返回 false，读不出的包返回 undefined', () => {
+  // 拿测试文件自己的目录当运行时根（有 package.json 的父级不一定在，所以只验保守行为）
+  const runtime = createRuntime(process.cwd())
+  assert.equal(runtime.resolvable('@deepseek-ai/dsh-tool-subagent-control/list-agents-nope'), false)
+  assert.equal(runtime.sourceOf('@deepseek-ai/dsh-nope-pkg'), undefined)
+})
