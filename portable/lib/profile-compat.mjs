@@ -13,7 +13,7 @@
 //      就原样保留并回报，绝不猜着改。改坏了用户起不来，比不改更糟。
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /** 一份 profile 配置里，我们认识并负责迁移的包。 */
 const SUBAGENT = '@deepseek-ai/dsh-tool-subagent'
@@ -75,7 +75,10 @@ function sectionRange(lines, id) {
  * @param {string} runtimeDirectory 便携版 app/，或桌面版 resources/app.asar/dsh
  */
 export function createRuntime(runtimeDirectory) {
-  const require = createRequire(join(runtimeDirectory, 'package.json'))
+  // 必须先 resolve：update.exe 传进来的 --runtime 可能是相对的（CI 冒烟用的是 portable\app），
+  // createRequire 只吃绝对路径或 file URL，相对路径会直接抛
+  // "The argument 'filename' must be ... an absolute path string"。
+  const require = createRequire(join(resolve(runtimeDirectory), 'package.json'))
   const sources = new Map()
 
   /** 这个 specifier 在当前运行时里能解析吗。 */

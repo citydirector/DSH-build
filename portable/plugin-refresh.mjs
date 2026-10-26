@@ -258,8 +258,16 @@ export function applyPlan(plan, cli, run) {
  * @param options.profiles 要迁移的 profile 名；省略则全部
  */
 export function migrateProfiles({ home, runtime, profiles }) {
-  const wanted = profiles === undefined ? listProfiles(home) : listProfiles(home).filter(profile => profiles.includes(profile.name))
-  const runtime$ = createRuntime(runtime)
+  // 这一整层绝不能把更新拦住：任何一步出问题都退化成警告，让更新照常做完。
+  let wanted = []
+  let runtime$
+  try {
+    wanted = profiles === undefined ? listProfiles(home) : listProfiles(home).filter(profile => profiles.includes(profile.name))
+    runtime$ = createRuntime(runtime)
+  } catch (error) {
+    const detail = `迁移失败：${error instanceof Error ? error.message : String(error)}`
+    return wanted.map(profile => ({ profile: profile.name, changed: false, changes: [], warnings: [{ kind: 'migrate', detail }] }))
+  }
   return wanted.map((profile) => {
     try {
       return { profile: profile.name, ...migrateProfile(profile.dir, runtime$) }
