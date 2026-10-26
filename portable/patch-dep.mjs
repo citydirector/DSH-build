@@ -33,11 +33,22 @@ async function copyDir(src, dst) {
 }
 
 let copied = 0;
-async function ensure(name) {
+/**
+ * 复制一个包及其依赖闭包。
+ * @param {string} name - 包名。
+ * @param {boolean} [required] - 是调用方点名的种子（缺了就是构建坏了），还是递归撞上的依赖
+ *   （跨平台原生包本来就可能不在，缺了只是提示）。
+ */
+async function ensure(name, required = false) {
   const rel = name.split('/');
   if (await exists(join(targetNM, ...rel))) return;           // 已存在，跳过
   const src = join(rootNM, ...rel);
-  if (!(await exists(src))) { console.warn(`[dep] ${name} 缺失于 root，跳过`); return; }
+  if (!(await exists(src))) {
+    if (required) throw new Error(`patch-dep: 种子 ${name} 在 ${rootNM} 里不存在。它本该由 install 装上、` +
+      '或被这一步之前的某个环节带进来 —— 静默跳过只会让随包悄悄少一个提供方，最后在别的步骤炸。');
+    console.warn(`[dep] ${name} 缺失于 root，跳过`);
+    return;
+  }
   await copyDir(src, join(targetNM, ...rel));
   copied++;
   console.log(`[dep] ${name}`);
@@ -50,7 +61,7 @@ async function ensure(name) {
   }
 }
 
-for (const s of seeds) await ensure(s);
+for (const s of seeds) await ensure(s, true);
 console.log(`[dep] copied ${copied} packages`);
 
 // 声明种子（文件是这次拷的、还是 patch-peers 拷进来的 workspace 包，都要声明）。

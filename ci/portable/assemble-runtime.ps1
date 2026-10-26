@@ -19,6 +19,14 @@ Invoke-Native 'pnpm deploy' {
     portable/app
 }
 
+# 1b. pnpm 11.28 起，deploy 收尾会把「不在依赖树里、pnpm 也没有安装记录」的目录搬进
+#     node_modules/.ignored（11.27 不做这件事）。deploy 只认 @deepseek-ai/dsh 那棵子树，
+#     被判无关而搬走的 1170 个包里就有 @trycua/cua-driver、@ubjs/*、chrome-devtools-mcp、
+#     @babel/code-frame、@standard-schema/spec —— 全是第 4、6 步要从根 node_modules 复制的东西。
+#     搬走之后 patch-dep 只会"缺失于 root，跳过"，随包少了 Cua Driver SDK，直到 assert-shipped
+#     才在最后一步报错。先把它们搬回去，根 node_modules 就回到 install 结束时的样子。
+Invoke-Native 'restore-ignored' { node _build_repo\ci\portable\restore-ignored.mjs node_modules }
+
 # 2. 会话代际迁移器：把上游 scripts/migrate-sessions-to-v4.ts 打成随包分发的单文件 ESM
 #    （相对 import 内联，@deepseek-ai/* 保持 external 走 app/node_modules —— 迁移逻辑用的仍是上游
 #    自己的机器）。dsh.exe 启动时跑一次，把本地 v2/v3 会话补迁移到 v4。
