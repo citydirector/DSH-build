@@ -196,8 +196,27 @@ export function migratePatchText(text, runtime) {
       const row = rowId(line)
       return row !== undefined && row.id === 'tool-subagent-list-agents'
     })
+    // 反向：从 dev 回退到 stable 时这行必须回来 —— stable 的主入口不注册 list_agents，
+    // 子路径是它唯一的提供者，缺了它 list_agents 工具就直接消失。
+    // 插在主入口行之后，保持和上游分组的样子一致。
     if (!present) {
-      warnings.push({ kind: 'list-agents', detail: '当前运行时有 /list-agents 子路径，但配置里没有这一行 —— 若 list_agents 工具不见了，需要手动补回' })
+      const anchor = current.findIndex((line) => {
+        const row = rowId(line)
+        return row !== undefined && row.id === 'tool-subagent-control'
+      })
+      if (anchor === -1) {
+        warnings.push({ kind: 'list-agents', detail: '当前运行时有 /list-agents 子路径，但配置里既没有该行、也没有 tool-subagent-control 主入口行，无法判断插入位置' })
+      } else {
+        let at = anchor + 1
+        if (at < current.length && rowName(current[at]) !== undefined) at++
+        // 跳过主入口块与下一行之间的分隔空行，让新块落在空行之后 —— 否则它会紧贴在
+        // 上一块的 name 行下面，读起来像同一行的一部分。
+        if (at < current.length && current[at].trim() === '') at++
+        const indent = rowId(current[anchor])?.indent ?? ''
+        const block = [`${indent}- id: tool-subagent-list-agents`, `${indent}  name: '${LIST_AGENTS}'`, '']
+        current = current.slice(0, at).concat(block, current.slice(at))
+        changes.push({ kind: 'list-agents', detail: '补回 tool-subagent-list-agents 行（当前版本的 list_agents 只由该子路径提供）' })
+      }
     }
   } else {
     const kept = []
@@ -253,7 +272,41 @@ export function migratePatchText(text, runtime) {
   //    且「presentation 已经是弃用转发壳」时才换。stable 没有 executor-ptc，一律不动。
   const presentationSource = runtime.sourceOf(PRESENTATION)
   const canForward = presentationSource !== undefined && presentationSource.includes('@deprecated') && runtime.resolvable(EXECUTOR_PTC)
-  if (canForward) {
+  // 反向：从 dev 回退到 stable 时 executor-ptc 根本不存在，留着它 = MODULE_NOT_FOUND、预设整组挂不上。
+  // 判据同样是「问运行时」：presentation 能解析、executor-ptc 不能，就必须换回去。
+  const mustRewind = !runtime.resolvable(EXECUTOR_PTC) && runtime.resolvable(PRESENTATION)
+  if (mustRewind) {
+    const rewound = []
+    for (let index = 0; index < current.length; index++) {
+      const row = rowId(current[index])
+      const next = index + 1 < current.length ? rowName(current[index + 1]) : undefined
+      const hit = row !== undefined && row.id === 'tool-executor-ptc' && next !== undefined && next.name === EXECUTOR_PTC
+      if (hit) {
+        // 配置里可能本来就留着 presentation 那一行（手写的，或者正向迁移没跑过）。
+        // 那种情况下只删 executor 块 —— 再补一份就是同一 scope 里挂两次，
+        // 上游会报 "Only one tool executor may be registered in each scope"。
+        const already = current.some((line, at) => {
+          const row2 = rowId(line)
+          return at !== index && row2 !== undefined && row2.id === 'tool-presentation'
+        })
+        if (already) {
+          changes.push({ kind: 'presentation', detail: '删除 tool-executor-ptc 行（配置里已有 tool-presentation；当前运行时没有 executor-ptc）' })
+        } else {
+          rewound.push(row.indent + '- id: tool-presentation')
+          rewound.push(next.indent + "name: '" + PRESENTATION + "'")
+          rewound.push(next.indent + 'config:')
+          rewound.push(next.indent + '  mode: ptc')
+          changes.push({ kind: 'presentation', detail: 'tool-executor-ptc → tool-presentation(mode: ptc)（当前运行时没有 executor-ptc）' })
+        }
+        index++
+        // 吃掉块尾的空行，删干净
+        if (index + 1 < current.length && current[index + 1].trim() === '') index++
+        continue
+      }
+      rewound.push(current[index])
+    }
+    current = rewound
+  } else if (canForward) {
     const replaced = []
     for (let index = 0; index < current.length; index++) {
       const row = rowId(current[index])
