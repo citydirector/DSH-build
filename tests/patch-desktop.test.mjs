@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchDesktopUpdate, isPatched as updatePatched, EDITS } from '../portable/patch-desktop-update.mjs'
-import { patchDesktopPortable } from '../portable/patch-desktop-portable.mjs'
+import { patchDesktopPortable, DESKTOP_FILES } from '../portable/patch-desktop-portable.mjs'
 import { patchDesktopToolchain, EDITS as TOOLCHAIN_EDITS } from '../portable/patch-desktop-toolchain.mjs'
 import { patchDesktopComputerUse, patchAsarUnpack, patchUbjsFile, patchUbjsLibPath, RUNTIME_PACKAGES } from '../portable/patch-desktop-computer-use.mjs'
 import { patchDesktopBrowserUse, RUNTIME_PACKAGES as BROWSER_USE_PACKAGES } from '../portable/patch-desktop-browser-use.mjs'
@@ -144,7 +144,7 @@ test('P2 写入 bootstrap 并把 import 插到第一行', () => {
   const root = makeTree()
   try {
     const result = patchDesktopPortable(root)
-    assert.deepEqual(result.added, ['apps/desktop/src/dsh-portable-bootstrap.ts'])
+    assert.deepEqual(result.added, DESKTOP_FILES.map(([, target]) => target))
     assert.equal(result.insertedImport, true)
     const main = readFileSync(join(root, 'apps/desktop/src/main.ts'), 'utf8')
     assert.equal(main.split('\n')[0], "import './dsh-portable-bootstrap.ts'")
