@@ -159,6 +159,77 @@ test('图片预算键只在 llm-pi-ai 段里删，别的段（llm-deepseek）不
   assert.equal(piAi.includes('imageMaxBytes'), false)
   assert.equal(piAi.includes('name: qwen'), true)
   assert.equal(deepseek.includes('imagePixelBudget: 640000'), true)
+  // 被删的两行是列表元素的首键，"- " 标记必须转交给下一个兄弟键 ——
+  // 否则 models 会从数组塌成映射，上游报 expected array but got [object Object]
+  assert.equal(piAi.includes('          - name: qwen'), true)
+})
+
+
+test('删掉元素首键时把 "- " 标记转交给下一个兄弟键', () => {
+  const text = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      ollama:',
+    '        models:',
+    '          - imagePixelBudget: 640000',
+    '            id: deepseek-v4.1-flash:1017',
+    '            name: Ollama/Deepseek-V4.1-flash',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, devRuntime())
+  assert.equal(result.text.includes('- id: deepseek-v4.1-flash:1017'), true)
+  assert.equal(result.text.includes('imagePixelBudget'), false)
+})
+
+test('元素只剩一个键被删空时不留下孤零零的 "- "', () => {
+  const text = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    models:',
+    '      - imagePixelBudget: 640000',
+    '',
+    '- id: after',
+    '',
+  ].join('\n')
+  const result = migratePatchText(text, devRuntime())
+  assert.equal(result.text.includes('imagePixelBudget'), false)
+  assert.equal(/^[ \t]*-[ \t]*$/mu.test(result.text), false)
+})
+
+test('已经写坏的配置（models 下整块没有标记）会被补回来', () => {
+  const broken = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      ollama:',
+    '        models:',
+    '          id: deepseek-v4.1-flash:1017',
+    '          name: Ollama/Deepseek-V4.1-flash',
+    '          input:',
+    '            - text',
+    '            - image',
+    '      deepinfra:',
+    '        models:',
+    '          - id: deepinfra/one',
+    '',
+  ].join('\n')
+  const result = migratePatchText(broken, devRuntime())
+  assert.equal(result.text.includes('        - id: deepseek-v4.1-flash:1017'), true)
+  assert.equal(result.text.includes('          - id: deepinfra/one'), true)
+  assert.equal(result.changes.filter(change => change.kind === 'model-list').length, 1)
+})
+
+test('自愈也是幂等的', () => {
+  const broken = [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    models:',
+    '      id: only',
+    '',
+  ].join('\n')
+  const once = migratePatchText(broken, devRuntime()).text
+  assert.equal(migratePatchText(once, devRuntime()).text, once)
 })
 
 test('stable 运行时（presentation 未弃用、executor-ptc 解析不到）不换 tool-presentation', () => {
