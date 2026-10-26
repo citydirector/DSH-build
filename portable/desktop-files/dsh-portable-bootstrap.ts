@@ -39,6 +39,7 @@ export interface PortableBootstrapResult {
   readonly portable: boolean
   readonly dataRoot?: string
   readonly migrationRan?: boolean
+  readonly profilesMigrated?: boolean
 }
 
 /** Electron-owned directories that must move under the package for a green install. */
@@ -209,7 +210,7 @@ export function applyPortableBootstrap(): PortableBootstrapResult {
   const migrationRan = migrateSessionsOnce(dataRoot, exeDirectory)
   const profilesMigrated = migrateProfilesOnce(dataRoot, exeDirectory)
   console.info(`portable bootstrap: data root ${dataRoot} (environment refreshed: ${refreshed})${migrationRan ? ' (session migration ran)' : ''}${profilesMigrated ? ' (profile migration ran)' : ''}`)
-  return { portable: true, dataRoot, migrationRan }
+  return { portable: true, dataRoot, migrationRan, profilesMigrated }
 }
 
 export const portableBootstrap = applyPortableBootstrap()
