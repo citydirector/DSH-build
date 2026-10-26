@@ -51,21 +51,21 @@ export function parseRegQueryEnvironment(stdout: string): UserEnvironmentEntry[]
   }
   for (const line of stdout.split(/\r?\n/)) {
     const match = ENTRY_PATTERN.exec(line)
-    if (match === null) {
+    const name = match?.[1]
+    const kind = match?.[2]
+    if (name === undefined || kind === undefined) {
       const continuation = line.trim()
       if (multiName !== undefined && continuation !== '') multiValues.push(continuation)
       continue
     }
     flushMulti()
-    const name = match[1].trim()
-    const kind = match[2]
-    const raw = match[3] ?? ''
+    const raw = match?.[3] ?? ''
     if (kind === 'REG_MULTI_SZ') {
-      multiName = name
+      multiName = name.trim()
       multiValues = raw === '' ? [] : [raw]
       continue
     }
-    entries.push({ name, kind, values: [raw] })
+    entries.push({ name: name.trim(), kind, values: [raw] })
   }
   flushMulti()
   return entries
@@ -73,7 +73,7 @@ export function parseRegQueryEnvironment(stdout: string): UserEnvironmentEntry[]
 
 /** Expand `%NAME%` references, leaving an unknown name untouched (the Windows rule). */
 export function expandPercentReferences(value: string, lookup: EnvironmentLookup): string {
-  return value.replace(/%([^%]+)%/g, (reference, name: string) => lookup(name) ?? reference)
+  return value.replace(/%([^%]+)%/g, (reference: string, name: string) => lookup(name) ?? reference)
 }
 
 /**
@@ -116,15 +116,18 @@ export function mergeUserEnvironment(
   target: Record<string, string | undefined> = process.env,
   lookup?: EnvironmentLookup,
 ): number {
-  const resolve = lookup ?? ((name: string) => target[name])
+  const resolve = lookup ?? ((name: string): string | undefined => target[name])
   let applied = 0
   for (const entry of entries) {
     const value = environmentValue(entry, resolve)
     if (value === undefined) continue
     const existing = target[entry.name]
-    const appended = ADDITIVE_NAMES.has(entry.name.toUpperCase())
-      && existing !== undefined && existing !== '' && !existing.includes(value)
-    target[entry.name] = appended ? `${existing};${value}` : value
+    if (ADDITIVE_NAMES.has(entry.name.toUpperCase())
+      && existing !== undefined && existing !== '' && !existing.includes(value)) {
+      target[entry.name] = `${existing};${value}`
+    } else {
+      target[entry.name] = value
+    }
     applied += 1
   }
   return applied
