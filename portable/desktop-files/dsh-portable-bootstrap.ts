@@ -6,13 +6,16 @@
  * ships a `portable.flag` marker next to the executable; without that marker
  * this module does nothing and the application behaves exactly as upstream.
  * It also points the XDG base directories at the data root, so XDG-following
- * plugins stay inside the package too.
+ * plugins stay inside the package too, and refreshes `process.env` from the
+ * Windows per-user environment registry key (see `dsh-user-environment.ts`) so a
+ * value the user changed after logon is visible without a restart.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
+import { refreshUserEnvironment } from './dsh-user-environment.ts'
 
 /** Marker file that opts this installation into the package-local data root. */
 export const PORTABLE_FLAG = 'portable.flag'
@@ -120,10 +123,18 @@ function migrateSessionsOnce(dataRoot: string, exeDirectory: string): boolean {
   return true
 }
 
-/** Apply the portable layout when the package carries its marker file. */
+/**
+ * Apply the portable layout when the package carries its marker file.
+ *
+ * The environment refresh runs first, before this module assigns anything of its
+ * own, so a variable the user configured wins over our defaults — the same order
+ * the portable launcher uses. It is deliberately part of the portable bootstrap:
+ * a package without `portable.flag` behaves exactly as upstream.
+ */
 export function applyPortableBootstrap(): PortableBootstrapResult {
   const exeDirectory = dirname(process.execPath)
   if (!existsSync(join(exeDirectory, PORTABLE_FLAG))) return { portable: false }
+  const refreshed = refreshUserEnvironment()
   const dataRoot = join(exeDirectory, 'data')
   mkdirSync(dataRoot, { recursive: true })
   process.env.DSH_HOME = dataRoot
@@ -131,7 +142,7 @@ export function applyPortableBootstrap(): PortableBootstrapResult {
   redirectXdgPaths(dataRoot)
   pinPluginNodeRuntime()
   const migrationRan = migrateSessionsOnce(dataRoot, exeDirectory)
-  console.info(`portable bootstrap: data root ${dataRoot}${migrationRan ? ' (session migration ran)' : ''}`)
+  console.info(`portable bootstrap: data root ${dataRoot} (environment refreshed: ${refreshed})${migrationRan ? ' (session migration ran)' : ''}`)
   return { portable: true, dataRoot, migrationRan }
 }
 

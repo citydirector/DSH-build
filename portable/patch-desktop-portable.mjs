@@ -2,6 +2,7 @@
 //
 // 把上游 Electron 桌面端改造成**绿色便携**形态（我们的习惯）：
 //   1. 新增 apps/desktop/src/dsh-portable-bootstrap.ts（便携引导：见该文件头注释）
+//      + apps/desktop/src/dsh-user-environment.ts（注册表环境刷新，引导的第一步）
 //   2. 在 apps/desktop/src/main.ts **第一行**插 `import './dsh-portable-bootstrap.ts'`，
 //      保证它在任何其它模块副作用之前执行（ESM 按源码顺序求值）。
 //
@@ -17,10 +18,18 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const BOOTSTRAP_SOURCE = join(HERE, 'desktop-files', 'dsh-portable-bootstrap.ts')
-const BOOTSTRAP_TARGET = 'apps/desktop/src/dsh-portable-bootstrap.ts'
 const MAIN = 'apps/desktop/src/main.ts'
 const IMPORT_LINE = "import './dsh-portable-bootstrap.ts'\n"
+
+/**
+ * Files this patch installs verbatim, as `[source basename, target path]` pairs.
+ * The bootstrap imports the environment reader by a sibling specifier, so both
+ * have to land in the same directory.
+ */
+export const DESKTOP_FILES = [
+  ['dsh-portable-bootstrap.ts', 'apps/desktop/src/dsh-portable-bootstrap.ts'],
+  ['dsh-user-environment.ts', 'apps/desktop/src/dsh-user-environment.ts'],
+]
 
 /**
  * 应用便携补丁（幂等）。
@@ -31,10 +40,12 @@ export function patchDesktopPortable(root) {
   const mainPath = join(root, MAIN)
   const raw = readFileSync(mainPath, 'utf8')
   const added = []
-  const bootstrapPath = join(root, BOOTSTRAP_TARGET)
-  if (!existsSync(bootstrapPath) || readFileSync(bootstrapPath, 'utf8') !== readFileSync(BOOTSTRAP_SOURCE, 'utf8')) {
-    copyFileSync(BOOTSTRAP_SOURCE, bootstrapPath)
-    added.push(BOOTSTRAP_TARGET)
+  for (const [source, target] of DESKTOP_FILES) {
+    const sourcePath = join(HERE, 'desktop-files', source)
+    const targetPath = join(root, target)
+    if (existsSync(targetPath) && readFileSync(targetPath, 'utf8') === readFileSync(sourcePath, 'utf8')) continue
+    copyFileSync(sourcePath, targetPath)
+    added.push(target)
   }
   let insertedImport = false
   if (!raw.startsWith(IMPORT_LINE)) {
@@ -54,5 +65,5 @@ if (import.meta.main) {
     process.exit(2)
   }
   const result = patchDesktopPortable(resolve(root))
-  console.log(`patch-desktop-portable: bootstrap=${result.added.length > 0 ? 'written' : 'unchanged'} import=${result.insertedImport ? 'inserted' : 'present'}`)
+  console.log(`patch-desktop-portable: files=${result.added.length > 0 ? `written(${String(result.added.length)})` : 'unchanged'} import=${result.insertedImport ? 'inserted' : 'present'}`)
 }
