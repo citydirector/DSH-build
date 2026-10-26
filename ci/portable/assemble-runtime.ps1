@@ -77,7 +77,11 @@ Invoke-Native 'patch-dep' {
 #    pnpm，直接跑 lib/bin.js 的插件命令一律 "pnpm was not found"。pnpm 取上游根 devDependency
 #    （与桌面版 primary-runtime 里那份同版本），放 app\vendor 下：更新器只镜像 app/node，放别处不会随更新替换。
 Copy-Item _build_repo\portable\plugin-refresh.mjs portable\app\plugin-refresh.mjs -Force
+# plugin-refresh.mjs 用相对路径 import './lib/profile-compat.mjs'（更新期的 profile 配置迁移），
+# lib 目录必须一起放，否则那条 import 直接 ERR_MODULE_NOT_FOUND。
 Copy-Item _build_repo\portable\dsh-plugin-cli.mjs portable\app\dsh-plugin-cli.mjs -Force
+New-Item -ItemType Directory -Path portable\app\lib -Force | Out-Null
+Copy-Item _build_repo\portable\lib\profile-compat.mjs portable\app\lib\profile-compat.mjs -Force
 Invoke-Native 'vendor pnpm' {
   node -e "const fs=require('node:fs');fs.rmSync('portable/app/vendor/pnpm',{recursive:true,force:true});fs.cpSync(fs.realpathSync('node_modules/pnpm'),'portable/app/vendor/pnpm',{recursive:true,dereference:true})"
 }

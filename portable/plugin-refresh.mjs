@@ -23,8 +23,9 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRuntime, migrateProfile } from './lib/profile-compat.mjs'
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
 const WORKSPACE_RANGES = new Set(['workspace:^', 'workspace:~', 'workspace:*'])
@@ -249,6 +250,53 @@ export function applyPlan(plan, cli, run) {
   return results
 }
 
+/**
+ * 把每个 profile 的 cordis.patch.yml 迁到新运行时的口径上（见 lib/profile-compat.mjs 头注释）。
+ * 迁移本身失败不该拦住更新：逐个 profile 兜住，把错误降级成 warning。
+ * @param options.home DSH_HOME
+ * @param options.runtime 新运行时目录（迁移的判据全问它）
+ * @param options.profiles 要迁移的 profile 名；省略则全部
+ */
+export function migrateProfiles({ home, runtime, profiles }) {
+  const wanted = profiles === undefined ? listProfiles(home) : listProfiles(home).filter(profile => profiles.includes(profile.name))
+  const runtime$ = createRuntime(runtime)
+  return wanted.map((profile) => {
+    try {
+      return { profile: profile.name, ...migrateProfile(profile.dir, runtime$) }
+    } catch (error) {
+      return {
+        profile: profile.name, changed: false, changes: [],
+        warnings: [{ kind: 'migrate', detail: `迁移失败：${error instanceof Error ? error.message : String(error)}` }],
+      }
+    }
+  })
+}
+
+/**
+ * 从 CLI 命令里认出运行时目录：向上找 name 为 @deepseek-ai/dsh 的 package.json。
+ * 便携版 CLI 是 app/dsh-plugin-cli.mjs（运行时即 app/），桌面版是
+ * resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js（运行时在更上层）。
+ * 认不出返回 undefined —— 调用方必须放弃迁移，不能瞎猜。
+ */
+export function runtimeFromCli(cli) {
+  for (const argument of cli) {
+    if (typeof argument !== 'string' || !/\.(?:mjs|cjs|js)$/u.test(argument)) continue
+    let directory = dirname(resolve(argument))
+    for (let depth = 0; depth < 10; depth++) {
+      const manifest = join(directory, 'package.json')
+      if (existsSync(manifest)) {
+        try {
+          if (readJson(manifest).name === '@deepseek-ai/dsh') return directory
+        } catch { /* 读不了就继续往上找 */ }
+      }
+      const parent = dirname(directory)
+      if (parent === directory) break
+      directory = parent
+    }
+  }
+  return undefined
+}
+
 /** 从运行时目录解析 app-boot（取版本）与它所用的 semver。 */
 export function loadRuntime(runtimeDirectory) {
   const runtimeDir = resolve(runtimeDirectory)
@@ -303,6 +351,14 @@ async function main(argv) {
       home: options.home, runtimeVersion: version, semver, fetchPackument: fetchPackumentHttp, all: options.all,
       env: process.env, userNpmrc: readText(join(process.env.USERPROFILE ?? homedir(), '.npmrc')),
     })
+    // 配置文件也要跟着新运行时走：子路径被删、键被改名，都会让预设整组挂不上（见 lib/profile-compat.mjs）。
+    // 这一步与插件升级无关，只改 profile 里的 cordis.patch.yml，且判据全来自 options.runtime。
+    const migrated = migrateProfiles({ home: options.home, runtime: options.runtime })
+    for (const item of migrated) {
+      for (const warning of item.warnings) console.log(`  [${item.profile}] 配置迁移未完成：${warning.detail}`)
+      for (const change of item.changes) console.log(`  [${item.profile}] 配置迁移：${change.detail}`)
+    }
+
     writeFileSync(options.out, `${JSON.stringify(plan, undefined, 2)}\n`)
     const report = formatPlan(plan)
     if (report !== '') console.log(report)
@@ -315,6 +371,17 @@ async function main(argv) {
   }
   if (options.command === 'apply') {
     if (!options.plan || options.cli.length === 0) throw new Error('用法：apply --plan <plan.json> -- <dsh CLI 命令...>')
+    // 兜底：check 时若没能迁移（例如插件检查失败提前返回），这里用刚就位的新运行时再试一次。
+    // 幂等，已迁移过就什么都不写。
+    const runtimeDirectory = runtimeFromCli(options.cli)
+    if (runtimeDirectory !== undefined) {
+      const home = process.env.DSH_HOME
+      if (home !== undefined && home !== '') {
+        for (const item of migrateProfiles({ home, runtime: runtimeDirectory })) {
+          for (const change of item.changes) console.log(`  [${item.profile}] 配置迁移：${change.detail}`)
+        }
+      }
+    }
     if (!existsSync(options.plan)) return 0
     const plan = readJson(options.plan)
     if (upgradesOf(plan).length === 0) return 0
