@@ -235,6 +235,14 @@ test('migrateProfile：目录里没有 cordis.patch.yml 时安静返回', () => 
   assert.deepEqual(result.warnings, [])
 })
 
+test('createRuntime：相对运行时目录也能构造（update.exe 与 CI 冒烟传的是相对路径）', () => {
+  // createRequire 只吃绝对路径或 file URL；上一版直接把参数塞进去，CI 冒烟因此报
+  // "The argument 'filename' must be ... an absolute path string"。
+  const runtime = createRuntime('some\\relative\\runtime')
+  assert.equal(typeof runtime.resolvable, 'function')
+  assert.equal(runtime.resolvable('@deepseek-ai/dsh-nope-pkg'), false)
+})
+
 test('createRuntime：解析不到的 specifier 返回 false，读不出的包返回 undefined', () => {
   // 拿测试文件自己的目录当运行时根（有 package.json 的父级不一定在，所以只验保守行为）
   const runtime = createRuntime(process.cwd())
