@@ -81,14 +81,16 @@ function findWorkspacePackage(root, name) {
 /** 逐级向上找 `<dir>/node_modules/<name>`：走 node_modules 链但绕开 exports（有些包不暴露
  *  ./package.json，有些是 ESM-only），且当某一级目录本身就叫 node_modules 时直接在其下找 ——
  *  pnpm 的 isolated 布局里"包与它的依赖并排"正是这个形状。命中后做 realpath：pnpm 的链接要
- *  还原到 store 的真实位置，否则从链接出发找不到它的兄弟依赖。 */
+ *  还原到 store 的真实位置，否则从链接出发找不到它的兄弟依赖。
+ *  必须用 realpathSync.native：Windows 上的 junction 在 JS 实现里被当成普通目录原样返回，
+ *  只有 native 那条路会把链接解开 —— 不解开就从链接出发往上走，永远走不到 store 里。 */
 function findPackage(startDir, name) {
   let dir = startDir
   for (let depth = 0; depth < 16; depth += 1) {
     const base = basename(dir) === 'node_modules' ? dir : join(dir, 'node_modules')
     const packageDir = join(base, name)
     if (existsSync(join(packageDir, 'package.json'))) {
-      const real = realpathSync(packageDir)
+      const real = realpathSync.native(packageDir)
       return { dir: real, manifest: JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) }
     }
     const parent = dirname(dir)
