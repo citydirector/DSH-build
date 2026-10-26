@@ -41,12 +41,16 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # pnpm 版本单一事实来源：11.27.1。12.x 全系在工作区里跑 `pnpm run/exec` 必失败（内部那次依赖
-  # 校验安装带上了已被自己移除的 verify-deps-before-run-install，外部 --config 覆盖救不了）；
-  # 11.7.0 又有 hoisted 缺陷 pnpm#12880（整目录替换会静默删掉并发兄弟的 _tmp_*）。
-  # 两个构建 job 因此都在 checkout 后把 packageManager 对齐到本版本（否则 pnpm 自动回退 11.7.0），
+  # pnpm 版本不再手写：`ci/align-package-manager.mjs` 从上游根 package.json 的
+  # devDependencies.pnpm 读出来（桌面版 primary-runtime 里的 pnpm 正是 prepare.ts 从那份拷进去的，
+  # 所以构建用的 pnpm 恒等于用户运行时拿到的 pnpm），校验禁区后经 $GITHUB_OUTPUT 交给
+  # 下面的 pnpm/action-setup。禁区：<11.7.1 有 hoisted 缺陷 pnpm#12880（整目录替换会静默删掉
+  # 并发兄弟的 _tmp_*）；12.x 全系在工作区里跑 `pnpm run/exec` 必失败（内部那次依赖校验安装带上了
+  # 已被自己移除的 verify-deps-before-run-install，外部 --config 覆盖救不了）。
+  # 留空 = 自动跟随上游；只在紧急钉版时才填（填了会与随包 pnpm 不同版本，脚本会警告）。
+  # 三个 job 都在 checkout 后跑它对齐 packageManager（否则 pnpm 自动回退上游钉的那个版本），
   # 且每次 pnpm 调用带 --pm-on-fail=ignore（防它把 packageManagerDependencies 写进锁文件）。
-  PNPM_VERSION: "11.27.1"
+  PNPM_VERSION: ""
 
 jobs:
   # -------- 解析目标上游提交 + 跳过判定 --------
@@ -100,10 +104,11 @@ jobs:
           sparse-checkout: ci
       # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
       - name: Align packageManager pin with the pnpm we run
+        id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -146,10 +151,11 @@ jobs:
           ref: ${{ github.sha }}
           path: _build_repo
       - name: Align packageManager pin with the pnpm we run
+        id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -232,10 +238,11 @@ jobs:
           ref: ${{ github.sha }}
           path: _build_repo
       - name: Align packageManager pin with the pnpm we run
+        id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
       - uses: pnpm/action-setup@v6
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
