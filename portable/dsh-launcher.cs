@@ -384,6 +384,17 @@ class DshLauncher
     // 迁移器是随包分发的 app\migrate-profiles.mjs，判据全部问本版本自己的运行时（见
     // app\lib\profile-compat.mjs 头注释），所以不需要版本对照表。
     // 返回：0 成功；1 有 profile 迁移失败；2 跳过（无需迁移 / 已跑过 / 被禁用 / 缺迁移器）。
+    /// <summary>读出迁移标记里记录的运行时版本；读不到或不认识返回空串。</summary>
+    static string ReadMarkerVersion(string marker)
+    {
+        try
+        {
+            if (!File.Exists(marker)) return "";
+            return File.ReadAllText(marker).Trim();
+        }
+        catch { return ""; }
+    }
+
     static int RunProfileMigration(string baseDir, string nodeExe, string dataDir, bool force)
     {
         string migrator = Path.Combine(baseDir, "app", "migrate-profiles.mjs");
@@ -405,9 +416,12 @@ class DshLauncher
         }
 
         string markerDir = Path.Combine(dataDir, ".migrations");
-        string doneMarker = Path.Combine(markerDir, "profile-compat-" + version + ".done");
-        if (!force && File.Exists(doneMarker))
-            return 2;   // 本版本已处理过：静默跳过
+        // 标记只记「上一次成功迁移时用的是哪个运行时版本」，不按版本各存一个：
+        // dev → main → dev 这种来回切里，回到某个版本时若旧标记还在就会被跳过，
+        // 而配置此刻已经被上一跳改成了对面的口径。版本没变才跳过。
+        string doneMarker = Path.Combine(markerDir, "profile-compat.done");
+        if (!force && ReadMarkerVersion(doneMarker) == version)
+            return 2;   // 这一版已经处理过：静默跳过
 
         // 没有 profiles 目录 = 还没建过任何会话，没什么可迁的（也不该为它建目录）。
         string profilesDir = Path.Combine(dataDir, "profiles");
@@ -437,7 +451,8 @@ class DshLauncher
             }
             if (proc.ExitCode == 0)
             {
-                try { File.WriteAllText(doneMarker, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + " " + version); } catch { }
+                // 只写版本号本身，读回来的比较就不会有歧义。
+                try { File.WriteAllText(doneMarker, version); } catch { }
                 return 0;
             }
             // 失败不写 done 标记：下一个版本、或手动 --migrate-profiles 还能再试一次。

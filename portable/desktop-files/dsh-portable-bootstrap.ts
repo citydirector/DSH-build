@@ -10,11 +10,13 @@
  * Windows per-user environment registry key (see `dsh-user-environment.ts`) so a
  * value the user changed after logon is visible without a restart.
  *
- * Two one-shot migrations run here, both keyed on the packaged VERSION so a new
- * package runs them exactly once: the session generation upgrade, and the profile
- * configuration migration. The latter used to live in update.exe's plugin preflight,
- * which meant a failed preflight silently left the old configuration behind and the
- * freshly installed runtime then failed to mount its presets.
+ * Two migrations run here, both only once per package: the session generation
+ * upgrade (keyed on the packaged VERSION), and the profile configuration migration
+ * (keyed on which runtime version last succeeded, so hopping dev -> main -> dev
+ * repairs the files on every hop instead of trusting a stale marker). The latter
+ * used to live in update.exe's plugin preflight, which meant a failed preflight
+ * silently left the old configuration behind and the freshly installed runtime then
+ * failed to mount its presets.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -29,6 +31,9 @@ export const PORTABLE_FLAG = 'portable.flag'
 /** Directory, relative to the data root, that records one-shot migrations. */
 export const MIGRATION_MARKER_DIRECTORY = '.migrations'
 
+/** Records which runtime version last migrated the profiles; see migrateProfilesOnce. */
+const PROFILE_MARKER = 'profile-compat.done'
+
 /** Outcome of bootstrapping one process. */
 export interface PortableBootstrapResult {
   readonly portable: boolean
@@ -38,6 +43,14 @@ export interface PortableBootstrapResult {
 
 /** Electron-owned directories that must move under the package for a green install. */
 const ELECTRON_PATH_NAMES = ['userData', 'sessionData', 'cache', 'logs', 'crashDumps'] as const
+
+function readMarkerVersion(marker: string): string | undefined {
+  try {
+    return readFileSync(marker, 'utf8').trim()
+  } catch {
+    return undefined
+  }
+}
 
 function readVersion(exeDirectory: string): string {
   try {
@@ -145,22 +158,33 @@ function migrateSessionsOnce(dataRoot: string, exeDirectory: string): boolean {
 function migrateProfilesOnce(dataRoot: string, exeDirectory: string): boolean {
   const version = readVersion(exeDirectory)
   const markerDirectory = join(dataRoot, MIGRATION_MARKER_DIRECTORY)
-  const marker = join(markerDirectory, `profile-compat-${version}.done`)
-  if (existsSync(marker)) return false
+  const marker = join(markerDirectory, PROFILE_MARKER)
+  // A marker per version would skip the rerun that matters most: dev -> main -> dev.
+  // Each hop rewrites the profiles for the runtime it lands on, so returning to a
+  // version whose marker already exists would leave files in the other dialect.
+  // One marker recording which runtime last succeeded answers the real question.
+  if (readMarkerVersion(marker) === version) return false
   const migrator = join(process.resourcesPath, 'dsh-build', 'migrate-profiles.mjs')
   if (!existsSync(migrator)) return false
   const runtimeDirectory = join(process.resourcesPath, 'app.asar', 'dsh')
   if (!existsSync(runtimeDirectory)) return false
   const result = spawnSync(process.execPath, [migrator, '--home', dataRoot, '--runtime', runtimeDirectory], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: dataRoot },
-    stdio: 'inherit',
+    // Not 'inherit': this is a GUI process, and every launch would flash a console.
+    // Piped instead, so a failure still leaves something to read in the log.
+    stdio: 'pipe',
+    encoding: 'utf8',
   })
   mkdirSync(markerDirectory, { recursive: true })
   if (result.status !== 0) {
-    console.error(`portable bootstrap: profile migration exited with status ${String(result.status)}`)
+    const detail = (result.stderr ?? '').trim().split(/\r?\n/u).filter(Boolean).join(' | ')
+    console.error(`portable bootstrap: profile migration exited with status ${String(result.status)}${detail === '' ? '' : ': ' + detail}`)
     return false
   }
-  writeFileSync(marker, `${new Date().toISOString()}\n`)
+  if (result.stdout !== undefined && result.stdout.trim() !== '') {
+    console.log(`portable bootstrap: ${result.stdout.trim().split(/\r?\n/u).join(' | ')}`)
+  }
+  writeFileSync(marker, `${version}\n`)
   return true
 }
 
