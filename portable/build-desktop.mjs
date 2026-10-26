@@ -135,7 +135,7 @@ function main() {
   }
 
   writePackageEnvironment()
-  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / guest devtools / acl console)')
+  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / guest devtools / pnpm notifier / acl console)')
   run('patch', process.execPath, [join(HERE, 'patch-desktop-update.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
@@ -146,6 +146,9 @@ function main() {
   run('patch', process.execPath, [join(HERE, 'patch-desktop-browser-use.mjs'), SOURCE])
   // 打包版内嵌浏览器页（webview guest）默认禁用 DevTools；放开并绑定 F12 / Ctrl+Shift+I。
   run('patch', process.execPath, [join(HERE, 'patch-desktop-guest-devtools.mjs'), SOURCE])
+  // 随包 pnpm 的 update-notifier 会拿 npm 的 latest（12.x）比版本，用户每次 dsh plugin add 都看到
+  // 「可升级」；我们钉 11.x 且不能升，索性关掉提示（两处 packageManager.env 都要加）。
+  run('patch', process.execPath, [join(HERE, 'patch-desktop-pnpm-notifier.mjs'), SOURCE])
   // AclSandbox 用 creationFlags 0 起受限子进程，于是子进程挂在**跑 runner 的那个进程**的控制台上；
   // Electron 是 GUI 子系统、永远不持有控制台 → 桌面端每条受限命令都在 DLL 初始化阶段以 0xC0000142
   // 静默死亡。修在源码阶段，由 build:official 编译进产物。
