@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  appendMissingEntries,
   environmentValue,
   expandPercentReferences,
   mergeUserEnvironment,
@@ -92,6 +93,40 @@ test('合并：%VAR% 可以引用本轮已刷新的名字', () => {
   ]
   mergeUserEnvironment(entries, target)
   assert.equal(target.DERIVED, 'D:\\root\\sub')
+})
+
+test('追加：系统半段与用户半段拼接后，用户半段已在其中也不会丢弃系统目录', () => {
+  // 真实布局：继承来的 PATH 是 machine + ';' + user，user 半段正是其后缀。
+  // 旧实现用整串 includes 判断，此处恒为 true，于是走覆盖分支，machine 半段全丢。
+  const machine = 'C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\Wbem'
+  const user = 'D:\\Scoop\\apps\\nodejs-lts\\current\\bin;C:\\Users\\me\\bin'
+  const inherited = machine + ';' + user
+  assert.equal(appendMissingEntries(inherited, user), inherited)
+  assert.ok(appendMissingEntries(inherited, user).includes('system32'))
+})
+
+test('追加：只补缺的项，原有的项保持在前', () => {
+  const existing = 'C:\\WINDOWS\\system32;D:\\Tools'
+  assert.equal(appendMissingEntries(existing, 'd:\\tools;E:\\more'),
+    'C:\\WINDOWS\\system32;D:\\Tools;E:\\more')
+})
+
+test('追加：大小写与空项都不产生重复', () => {
+  assert.equal(appendMissingEntries('C:\\Windows', 'c:\\windows'), 'C:\\Windows')
+  assert.equal(appendMissingEntries('C:\\Windows;', ';;C:\\Windows'), 'C:\\Windows;')
+  assert.equal(appendMissingEntries('', 'C:\\Windows'), 'C:\\Windows')
+})
+
+test('合并：PATH 类名字在已有值上走追加分支，其它名字仍然覆盖', () => {
+  const target = { Path: 'C:\\WINDOWS\\system32;D:\\Scoop\\current', PATHEXT: '.COM;.EXE' }
+  mergeUserEnvironment([
+    { name: 'Path', kind: 'REG_EXPAND_SZ', values: ['D:\\Scoop\\current;E:\\new'] },
+    { name: 'PATHEXT', kind: 'REG_SZ', values: ['.COM;.EXE;.CMD'] },
+    { name: 'EDITOR', kind: 'REG_SZ', values: ['vim'] },
+  ], target)
+  assert.equal(target.Path, 'C:\\WINDOWS\\system32;D:\\Scoop\\current;E:\\new')
+  assert.equal(target.PATHEXT, '.COM;.EXE;.CMD')
+  assert.equal(target.EDITOR, 'vim')
 })
 
 test('刷新：读不到注册表时返回 0 且不抛错', () => {
