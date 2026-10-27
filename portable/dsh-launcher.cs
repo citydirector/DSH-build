@@ -10,6 +10,7 @@
 //       plugin ...：改走 app\dsh-plugin-cli.mjs，把随包 pnpm 交给上游 CLI（否则要求 PATH 上有 pnpm）。
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
@@ -74,6 +75,14 @@ class DshLauncher
                     if (envKey.GetValueKind(name) == RegistryValueKind.ExpandString)
                         val = Environment.ExpandEnvironmentVariables(val);
                     if (string.IsNullOrEmpty(val)) continue;
+                    // PATH 一族是 system + user 两半：注册表只有 user 那一半，直接赋值会把
+                    // system 目录（system32 等）整段丢掉，此后 bash/cmd 一类全解析不到。
+                    // 这几项改为只补缺的项，进程已有的一半留在前面。
+                    if (IsAdditiveName(name))
+                    {
+                        string existing = Environment.GetEnvironmentVariable(name);
+                        if (!string.IsNullOrEmpty(existing)) val = AppendMissingEntries(existing, val);
+                    }
                     Environment.SetEnvironmentVariable(name, val, EnvironmentVariableTarget.Process);
                 }
             }
@@ -465,6 +474,40 @@ class DshLauncher
             Console.Error.WriteLine("profile 迁移器启动失败：" + ex.Message);
             return 1;
         }
+    }
+
+    // ── 系统/用户各占一半的环境变量 ────────────────────────────────────────────
+    // 注册表 HKCU\Environment 只存用户那一半；PATH 一族必须与进程已有的（继承自
+    // 父进程的 system 半段）合并，不能整段覆盖。比较按项、按大小写不敏感。
+    static readonly string[] AdditiveNames = new string[] { "PATH", "PSMODULEPATH", "PATHEXT", "LIB", "INCLUDE" };
+
+    static bool IsAdditiveName(string name)
+    {
+        foreach (string additive in AdditiveNames)
+        {
+            if (string.Equals(additive, name, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    static string AppendMissingEntries(string existing, string value)
+    {
+        HashSet<string> present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string item in existing.Split(';'))
+        {
+            string trimmed = item.Trim();
+            if (trimmed.Length > 0) present.Add(trimmed);
+        }
+        List<string> additions = new List<string>();
+        foreach (string item in value.Split(';'))
+        {
+            string trimmed = item.Trim();
+            if (trimmed.Length == 0) continue;
+            if (present.Add(trimmed)) additions.Add(trimmed);
+        }
+        if (additions.Count == 0) return existing;
+        string separator = existing.TrimEnd().EndsWith(";", StringComparison.Ordinal) || existing.Trim().Length == 0 ? "" : ";";
+        return existing + separator + string.Join(";", additions);
     }
 
     // ── XDG 重定向 ───────────────────────────────────────────────────────────

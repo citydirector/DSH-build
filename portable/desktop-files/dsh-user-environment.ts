@@ -104,12 +104,35 @@ export function environmentValue(entry: UserEnvironmentEntry, lookup: Environmen
  */
 const ADDITIVE_NAMES = new Set(['PATH', 'PSMODULEPATH', 'PATHEXT', 'LIB', 'INCLUDE'])
 
+/** The five additive names are all semicolon-separated Windows path lists. */
+const ADDITIVE_SEPARATOR = ';'
+
+/**
+ * Append the entries of `value` that `existing` does not already carry.
+ *
+ * The comparison is per entry, never per string. A whole-string `includes` looks
+ * like the obvious test and is always true here: the inherited block already
+ * ends with the user half, so `existing.includes(value)` matches and the caller
+ * would take the overwrite branch instead — dropping every system directory.
+ * Windows compares these lists case-insensitively, so the de-duplication does too.
+ */
+export function appendMissingEntries(existing: string, value: string): string {
+  const normalize = (item: string): string => item.trim().toLowerCase()
+  const present = new Set(existing.split(ADDITIVE_SEPARATOR).map(normalize).filter((item) => item !== ''))
+  const additions = value.split(ADDITIVE_SEPARATOR)
+    .filter((item) => item.trim() !== '' && !present.has(normalize(item)))
+  if (additions.length === 0) return existing
+  const separator = existing.trimEnd().endsWith(ADDITIVE_SEPARATOR) || existing.trim() === '' ? '' : ADDITIVE_SEPARATOR
+  return `${existing}${separator}${additions.map((item) => item.trim()).join(ADDITIVE_SEPARATOR)}`
+}
+
 /**
  * Write every representable entry into `target`, returning how many landed.
  * Entries are applied one at a time so a `%VAR%` reference may point at a name
  * this same pass already refreshed. Later assignments win, exactly as they would
- * in the block itself — except for the additive names above, where the value the
- * process already carries stays in front.
+ * in the block itself — except for the additive names above, where the process's
+ * own directories stay in front and only the registry entries it lacks are
+ * appended (see {@link appendMissingEntries}).
  */
 export function mergeUserEnvironment(
   entries: readonly UserEnvironmentEntry[],
@@ -122,9 +145,8 @@ export function mergeUserEnvironment(
     const value = environmentValue(entry, resolve)
     if (value === undefined) continue
     const existing = target[entry.name]
-    if (ADDITIVE_NAMES.has(entry.name.toUpperCase())
-      && existing !== undefined && existing !== '' && !existing.includes(value)) {
-      target[entry.name] = `${existing};${value}`
+    if (ADDITIVE_NAMES.has(entry.name.toUpperCase()) && existing !== undefined && existing !== '') {
+      target[entry.name] = appendMissingEntries(existing, value)
     } else {
       target[entry.name] = value
     }

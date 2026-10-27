@@ -8,6 +8,8 @@
 
 **绿色承诺**：可执行文件旁有 `portable.flag` 时，`DSH_HOME` = 包内 `data/`，Electron 的 `userData`/`sessionData`/`cache`/`logs`/`crashDumps` 也全部重定向到 `data/electron/`；未设置的 `XDG_{CONFIG,DATA,STATE,CACHE}_HOME` 指到 `data/xdg/`（首次切换时把用户目录里已有的 `billion-context` 文件夹复制过来，原件保留），`BILLION_CONTEXT_NODE` 指到随包 node —— 不写注册表、不写 C 盘用户目录；删除整个目录即彻底卸载。
 
+启动时还会从 `HKCU\Environment` 重新读一遍用户环境（`setx` 之后再启动就能看到新值）。**`PATH` 及其兄弟 `PSMODULEPATH`/`PATHEXT`/`LIB`/`INCLUDE` 是 system 与 user 各占一半**，注册表里只有 user 那一半，所以这几项按项合并、只补缺的：整段覆盖会让 `system32` 从进程 `PATH` 里消失，`bash`/`cmd` 一类随后全解析不到。
+
 ## 目录结构
 
 ```
@@ -67,7 +69,7 @@ dsh-desktop/
 | 补丁 | 作用 |
 |---|---|
 | `patch-desktop-update.mjs` | 产物 manifest 不嵌 Platform 策略（1 处） |
-| `patch-desktop-portable.mjs` | 在 `apps/desktop/src/main.ts` 首行注入便携引导（`desktop-files/dsh-portable-bootstrap.ts`）：DSH_HOME 与 Electron 目录重定向 + 按 VERSION 跑一次会话迁移 |
+| `patch-desktop-portable.mjs` | 在 `apps/desktop/src/main.ts` 首行注入便携引导（`desktop-files/dsh-portable-bootstrap.ts`）：DSH_HOME 与 Electron 目录重定向 + 注册表环境刷新（`desktop-files/dsh-user-environment.ts`）+ 按 VERSION 跑一次会话迁移 |
 | `patch-desktop-toolchain.mjs` | 三处“只服务安装器或深层目录”的步骤加显式开关：VS 预检、NSIS 安装器 UI 准备、打包后冒烟 |
 | `patch-desktop-runtime-patch.mjs` | 禁止打包流程内部重跑 `build:official`（否则会覆盖已经打好的 P1） |
 | `patch-desktop-guest-devtools.mjs` | 内嵌浏览器页（webview guest）在打包版也允许 DevTools，guest 聚焦时 F12 / Ctrl+Shift+I 打开其独立 DevTools 窗口（2 处） |
