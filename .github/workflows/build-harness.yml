@@ -4,6 +4,8 @@ name: Build DSH
 # 目标上游取 portable/upstream.pin（只在晋升时推进，所以稳定版可复现）。
 # GitHub 的 schedule 只在默认分支触发，因此每日构建天然只走 dev 通道。
 # 跳过判定：自动触发要求「目标上游提交 + 胶水指纹」都相同；手动 dispatch 一律构建。
+# 另有方向护栏：已发布的上游提交必须本次目标的祖先，否则不构建（上游并行维护 rc / alpha 两条线，
+# 稳定线同步回 master 期间版本号会倒退，那种产物会覆盖用户手上更新的版本）。
 # 通道语义、晋升路径、产物与本地补丁详见 README.md。
 # 这里只做编排：每一步的逻辑在 ci/（流水线脚本）与 portable/（构建 / 补丁脚本）里，可在本地单独跑。
 on:
@@ -60,6 +62,7 @@ jobs:
       channel: ${{ steps.resolve.outputs.channel }}
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       skip: ${{ steps.resolve.outputs.skip }}
+      regressed: ${{ steps.resolve.outputs.regressed }}
       sha: ${{ steps.resolve.outputs.sha }}
       short_sha: ${{ steps.resolve.outputs.short_sha }}
       glue: ${{ steps.resolve.outputs.glue }}
@@ -313,6 +316,27 @@ jobs:
           SC3_UID: ${{ secrets.SC3_UID }}
           SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
         run: bash ci/notify.sh success
+
+  # -------- 回退通知（独立 job：release 在 skip 时根本不跑，挂不上） --------
+  # 方向护栏（ci/resolve-target.sh）判定上游在回退时把 skip 置真 —— 流水线整体是绿的、
+  # 只是产物没更新。静默跳过会让人误以为"今天上游没动"，所以单独推一条。
+  notify-regressed:
+    needs: [check]
+    if: needs.check.outputs.regressed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          sparse-checkout: ci
+      - name: Send regression notification
+        env:
+          SC3_UID: ${{ secrets.SC3_UID }}
+          SC3_SENDKEY: ${{ secrets.SC3_SENDKEY }}
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+        run: bash ci/notify.sh regressed
 
   # -------- 失败通知（独立 job：任一 job 失败都触发） --------
   # 不能放在 release job 里：release 的 needs 失败时会被整体跳过，if: failure() 永不触发。
