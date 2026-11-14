@@ -51,19 +51,19 @@ function childEnvironment() {
 function log(step, message) { console.log('[' + step + '] ' + message) }
 
 /**
- * 取「打完补丁后的 native 源码树」摘要（桥接脚本 --digest 的最后一行 JSON）。
- * 它是 helper 的 build identity：上游同一 commit、补丁不同 → digest 不同，绝不能混用。
+ * 取「未被注入的 native 源码树」摘要（摘要工具 `--digest --root` 的输出）。
+ * 它是 helper 的 build identity：只有摘要相同，才能确认产物里的二进制是用这棵树编的。
  */
 function readBridgeDigest(root) {
-  const result = spawnSync(process.execPath, [join(HERE, 'patch-cua-ui-locate-bridge.mjs'), root, '--digest'], { encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [join(HERE, 'patch-cua-ui-locate-bridge.mjs'), '--digest', '--root', root], { encoding: 'utf8' })
   if (result.error !== undefined) throw result.error
-  if (result.status !== 0) throw new Error('patch: ui-locate 桥接 --digest 失败（退出码 ' + String(result.status) + '）：' + String(result.stderr).trim())
+  if (result.status !== 0) throw new Error('patch: native 摘要工具 --digest 失败（退出码 ' + String(result.status) + '）：' + String(result.stderr).trim())
   const lines = String(result.stdout ?? '').trim().split(/\r?\n/u).filter((line) => line.trim() !== '')
-  // 摘要是一行 JSON，但不一定排在最后（桥接脚本的补丁日志可能跟在后面）：按内容找。
+  // 摘要是一行 JSON，但不一定排在最后（工具的其他输出可能跟在后面）：按内容找。
   const matches = lines.filter((line) => line.includes('"kind"') && line.includes('cua-helper-native-source'))
-  if (matches.length !== 1) throw new Error('patch: ui-locate 桥接 --digest 应输出且只输出一行原生源码摘要，实际 ' + matches.length + ' 行')
+  if (matches.length !== 1) throw new Error('patch: native 摘要工具 --digest 应输出且只输出一行原生源码摘要，实际 ' + matches.length + ' 行')
   let parsed
-  try { parsed = JSON.parse(matches[0]) } catch { throw new Error('patch: ui-locate 桥接 --digest 的摘要行不是 JSON：' + matches[0]) }
+  try { parsed = JSON.parse(matches[0]) } catch { throw new Error('patch: native 摘要工具 --digest 的摘要行不是 JSON：' + matches[0]) }
   return normalizeNativeSource(parsed, TAG)
 }
 
@@ -158,7 +158,7 @@ function main() {
 
   writePackageEnvironment()
 
-  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / cua chain / computer-use / browser-use / guest devtools / pnpm notifier / acl console / cua defaults / ui-locate bridge)')
+  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / cua chain / computer-use / browser-use / guest devtools / pnpm notifier / acl console / cua defaults)')
   run('patch', process.execPath, [join(HERE, 'patch-desktop-update.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
@@ -179,17 +179,16 @@ function main() {
   // 新 Computer Use 链默认启用：改 official-bundles 的 web 模板（desktop 复用）与通用默认。
   // 必须早于 build:official —— 它编译的是 src/bundles.ts。
   run('patch', process.execPath, [join(HERE, 'patch-cua-defaults.mjs'), SOURCE])
-  // ui-locate 桥接（B 拥有该脚本与 cua-bridge-files/）。这里只负责在 build:official 之前调用，
-  // 并**要求文件存在**：静默跳过会让产物里少一整套 dispatch/InputQueue 改动，而表面上构建成功。
+  // 博士 2026-11-14 的止损决定：**不再修改上游 CUA 源码**（dispatch / 系统输入队列 / deliveryMode /
+  // Windows 后台投递全部撤回）。产物只保留「新链默认启用 + helper 随包 + 完整性摘要」。
+  // 摘要工具要存在：缺失说明 build 仓不完整，直接失败，不允许产出一个没有源码身份证明的 helper。
   const bridge = join(HERE, 'patch-cua-ui-locate-bridge.mjs')
   if (!existsSync(bridge)) {
-    throw new Error('patch: 缺少 portable/patch-cua-ui-locate-bridge.mjs —— ui-locate 桥接补丁未随仓，构建必须失败')
+    throw new Error('patch: 缺少 portable/patch-cua-ui-locate-bridge.mjs —— native 摘要工具未随仓，构建必须失败')
   }
-  run('patch', process.execPath, [bridge, SOURCE])
 
-  // 构建前哨：helper 是在**补丁后**的 native 源码上编译的，所以摘要必须在补丁之后取。
-  // CI 的 cua-helper job 已经用同一份源码打过补丁并据此 publish；这里再算一次，两边不符就失败，
-  // 而不是让用户在点开应用时撞上「协议有新参数、二进制不认识」。
+  // 构建前哨：helper 是在**这棵原样 native 树**上编译的。CI 的 cua-helper job 用同一棵树算摘要，
+  // 这里再算一次；工具遇到被改过的树会拒绝出值，两边不符同样失败 —— 不会出现「二进制与源码不是一套」。
   const nativeSource = readBridgeDigest(SOURCE)
   const helper = verifyPayload(sourceHelperDirectory(SOURCE, 'x64'), {
     commit: TAG,

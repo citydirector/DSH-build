@@ -11,7 +11,8 @@
 //   node cua-helper.mjs publish --root <upstream> --out <dir> --commit <sha> --native-source-file <digest.json>
 //       CI 的 Windows job 用：dotnet 10 locked restore → Protocol.Tests → win-x64 self-contained
 //       publish → 写 cua-helper.json → 自校验。没有 SDK 时明确失败（本地不装 SDK）。
-//       digest.json 是 patch-cua-ui-locate-bridge.mjs --digest 的输出（必须先打补丁再 publish）。
+//       digest.json 是 patch-cua-ui-locate-bridge.mjs --digest 的输出。上游 native 树保持原样
+//       （2026-11-14 已撤回全部本地注入），摘要只用来证明「这份二进制来自哪棵树」。
 //   node cua-helper.mjs stage --from <payload-dir> --root <upstream> --commit <sha> [--native-digest sha256:…]
 //       把已校验的 payload 放进 packages/experimental/cua-windows/native/bin/win-<arch>。
 //   node cua-helper.mjs install --from <payload-dir> --package <安装态包目录> --commit <sha> [--native-digest …]
@@ -107,10 +108,10 @@ export function readManifest(directory) {
   if (typeof manifest?.version !== 'string' || manifest.version === '') problems.push('version 为空')
   if (typeof manifest?.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(manifest.sha256)) problems.push('sha256 不是 64 位小写十六进制')
   if (typeof manifest?.buildKey !== 'string' || !/^[0-9a-f]{64}$/u.test(manifest.buildKey)) problems.push('buildKey 不是 64 位小写十六进制')
-  // 本地原生补丁（B 的桥接）会改 cua-windows/native 下的 .cs：只比上游 commit 无法区分
-  // 「官方 39163dd 的 helper」与「打了本次 native 补丁的 helper」。这个摘要就是那个区分位。
+  // 上游只比 commit 不够：同一个上游 commit 也可能被本地修过（曾经真的发生过），而「哪棵树编出来的」
+  // 只有摘要能回答。摘要由 patch-cua-ui-locate-bridge.mjs --digest 产出，它同时审计树是否原样。
   if (manifest?.nativeSource === undefined) {
-    problems.push('缺少 nativeSource（补丁后 native 源码树的摘要，来自 patch-cua-ui-locate-bridge.mjs --digest）')
+    problems.push('缺少 nativeSource（native 源码树摘要，来自 patch-cua-ui-locate-bridge.mjs --digest）')
   } else {
     try { validateNativeSource(manifest.nativeSource, `${MANIFEST_NAME}.nativeSource`) } catch (error) { problems.push(error instanceof Error ? error.message : String(error)) }
   }
@@ -123,10 +124,10 @@ export function readManifest(directory) {
 }
 
 /**
- * 本地原生补丁的 build identity。由 `patch-cua-ui-locate-bridge.mjs --digest` 在**打完补丁之后**
+ * native 源码树的 build identity。由 `patch-cua-ui-locate-bridge.mjs --digest` 产出
  * 算出（native 整树按相对路径排序、逐文件 `path\0bytes\0` 喂 sha256），这里只校验形状并透传 ——
- * 两套口径会漂移，所以本文件不重算。它区分「上游同一 commit、但 native 源码被本地补丁改过」的
- * 两份 helper：JS 侧新参数配旧二进制时，报错位置离真正原因很远。
+ * 两套口径会漂移，所以本文件不重算。它回答的是「这份 helper 是用哪棵 native 树编出来的」：
+ * 上游 commit 相同、树被动过时，只有摘要能看出来。
  */
 export function readNativeSource(file, commit) {
   let value
@@ -470,9 +471,8 @@ function requireOption(options, name) {
   if (typeof value !== 'string' || value === '') throw new Error(`cua-helper: 缺少 --${name}`)
   return value
 }
-
 /**
- * 消费端用 `--native-source-file`（bridge `--digest` 的整行 JSON）或 `--native-digest`（只要摘要值）传期望值。
+ * 消费端用 `--native-source-file`（摘要工具的整行 JSON）或 `--native-digest`（只要摘要值）传期望值。
  * 两者都给时必须一致；只给 `--native-digest` 也必须真的比较 —— 否则「传了却没校验」会静静地放过旧二进制。
  */
 function digestExpectation(options) {

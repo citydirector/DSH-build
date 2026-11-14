@@ -1,736 +1,159 @@
 /**
  * `portable/patch-cua-ui-locate-bridge.mjs` 的测试。
  *
- * 两件事必须被真实覆盖，否则这个补丁只有「看起来对」：
- *   1. **在真实固定上游上打**——不是喂一段自造的假源码。所有 patch 用例都从
- *      `UI_LOCATE_UPSTREAM`（默认 `D:\DSHWorkspace\ui-locate\_skadi_temp\computer-use-audit\upstream`）
- *      把目标文件拷进临时镜像再打补丁；上游 checkout 不在的机器（比如精简 CI）
- *      跳过并在输出里说清楚原因，而不是假绿。
- *   2. **补丁的失败形态**——锚点消失必须响亮失败，重复执行必须幂等，`--check`
- *      不得写盘。
+ * 2026-11-14 起这个脚本**不再改上游源码**（博士止损决定：撤销全部本地注入），只做两件事：
+ *   1. 审计上游 CUA 源码是否仍是 pin 的原始形状（`--check`）；
+ *   2. 算 `cua-windows/native` 整树摘要，作为 helper 的 build identity（`--digest`）。
  *
- * 另外直接跑注入的两个纯文件：`cua-dispatch-guard.ts`（伪造/过期上下文）与
- * `system-input-queue.ts`（有界排队、取消不执行）。它们刻意不 import 运行时模块，
- * 所以 Node 的类型擦除就能直接执行。
+ * 所以测试覆盖的是这两件事，而不是「补丁打没打进去」：
+ *   - 真实固定上游上必须干净——**不是喂自造假源码**。`UI_LOCATE_UPSTREAM` 指向的 checkout
+ *     不存在时跳过并在输出里说明原因（不假绿）；CI 用 `UI_LOCATE_UPSTREAM=${{ github.workspace }}`。
+ *   - 四类污染都要被指出来：多余文件、注入标识、文件缺失。
+ *   - 摘要口径：形状、稳定性、跳过 bin/obj、随 `.cs` 改动变化、只收普通文件。
+ *   - CLI 退出码：干净 0、污染 1、污染时 `--digest` 拒绝出值。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { hashNativeTree, patchCuaUiLocateBridge } from '../portable/patch-cua-ui-locate-bridge.mjs'
-import { DispatchRejection, LiveDispatchRegistry, checkDispatch } from '../portable/cua-bridge-files/cua/cua-dispatch-guard.ts'
-import { InputQueueFullError, MAX_WAITING_INPUTS, SystemInputQueue } from '../portable/cua-bridge-files/cua/system-input-queue.ts'
+import { checkUpstream, hashNativeTree } from '../portable/patch-cua-ui-locate-bridge.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = dirname(HERE)
+const CLI = join(REPO, 'portable', 'patch-cua-ui-locate-bridge.mjs')
 const UPSTREAM = process.env.UI_LOCATE_UPSTREAM ?? 'D:\\DSHWorkspace\\ui-locate\\_skadi_temp\\computer-use-audit\\upstream'
 
-/** 补丁会碰到的全部上游文件（镜像只拷这些，足以验证锚点）。 */
-const TARGETS = [
-  'packages/experimental/cua/src/index.ts',
-  'packages/experimental/cua/src/protocol.ts',
-  'packages/experimental/cua/src/types.ts',
-  'packages/experimental/cua/src/guidance.ts',
-  'packages/experimental/cua/src/api.ts',
-  'packages/experimental/cua-windows/src/index.ts',
-  'packages/experimental/cua-windows/src/guidance.ts',
-  'packages/experimental/cua-windows/native/entry/Win32.cs',
-  'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs',
-  'packages/experimental/cua-windows/native/entry/Input.cs',
-]
+const CUA = 'packages/experimental/cua'
+const WINDOWS = 'packages/experimental/cua-windows'
+const haveUpstream = existsSync(join(UPSTREAM, CUA, 'src', 'index.ts')) && existsSync(join(UPSTREAM, WINDOWS, 'native', 'entry', 'Input.cs'))
+const missingUpstream = `上游 checkout 不在：${UPSTREAM}（设 UI_LOCATE_UPSTREAM 指向固定上游再跑；缺树=跳过，不假绿）`
 
-const haveUpstream = existsSync(join(UPSTREAM, TARGETS[0])) && existsSync(join(UPSTREAM, TARGETS.at(-1)))
-const missingUpstream = `上游 checkout 不在：${UPSTREAM}（设 UI_LOCATE_UPSTREAM 指向固定上游再跑）`
-
-/** 在仓内的临时目录里做一份镜像，测试结束删掉。 */
+/**
+ * 只把脚本会读的两棵子树 + 根 package.json 拷进临时镜像。
+ * 全树没必要（上游几万文件），而脚本也只读这些。
+ */
 function mirror(t) {
-  // mkdtemp 要求父目录已存在；`_skadi_temp` 会被清理，所以这里自己补上。
-  mkdirSync(join(REPO, '_skadi_temp'), { recursive: true })
-  const dir = mkdtempSync(join(REPO, '_skadi_temp', 'patch-test-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  for (const rel of TARGETS) {
-    const target = join(dir, rel)
-    mkdirSync(dirname(target), { recursive: true })
-    cpSync(join(UPSTREAM, rel), target)
-  }
-  return dir
+  const root = mkdtempSync(join(REPO, '_skadi_temp', 'cua-bridge-'))
+  mkdirSync(join(root, 'packages', 'experimental'), { recursive: true })
+  cpSync(join(UPSTREAM, CUA), join(root, CUA), { recursive: true })
+  cpSync(join(UPSTREAM, WINDOWS, 'native'), join(root, WINDOWS, 'native'), { recursive: true })
+  cpSync(join(UPSTREAM, WINDOWS, 'src'), join(root, WINDOWS, 'src'), { recursive: true })
+  cpSync(join(UPSTREAM, 'package.json'), join(root, 'package.json'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  return root
 }
 
-/** 读镜像里打完补丁的文件。 */
-const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
-
-// ── 真实上游上打补丁 ────────────────────────────────────────────────────────
-
-test('patch：在真实固定上游上把三份注入文件与十八条编辑全部打进去', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  const parts = patchCuaUiLocateBridge(root)
-  assert.deepEqual(parts, [
-    'packages/experimental/cua/src/index.ts: 4 edits',
-    'packages/experimental/cua/src/protocol.ts: 1 edits',
-    'packages/experimental/cua/src/types.ts: 2 edits',
-    'packages/experimental/cua-windows/src/index.ts: 1 edits',
-    'packages/experimental/cua-windows/src/guidance.ts: 1 edits',
-    'packages/experimental/cua-windows/native/entry/Win32.cs: 1 edits',
-    'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs: 2 edits',
-    'packages/experimental/cua-windows/native/entry/Input.cs: 2 edits',
-    'packages/experimental/cua/src/guidance.ts: 2 edits',
-    'packages/experimental/cua/src/api.ts: 4 edits',
-  ])
-  for (const name of ['cua-dispatch.ts', 'cua-dispatch-guard.ts', 'system-input-queue.ts']) {
-    assert.ok(existsSync(join(root, 'packages/experimental/cua/src', name)), `${name} 必须被注入`)
-  }
-  // 分发面：同一 function、注册在 runtime effect 内、经 ctx.provide 撤销。
-  const cua = read(root, 'packages/experimental/cua/src/index.ts')
-  assert.match(cua, /import \{ installCuaDispatch \} from '\.\/cua-dispatch\.ts'/)
-  assert.match(cua, /yield installCuaDispatch\(ctx, tool\)/)
-  assert.match(cua, /deliveryModes/, 'getCapabilities 必须上报 deliveryModes')
-  // 系统输入走共享队列：原 CUA 与 Host 桥接共用同一个入口。
-  assert.match(cua, /systemInputQueue/)
-  // click 契约扩展：schema 里出现 deliveryMode，且是 click 细分而非全局。
-  const protocol = read(root, 'packages/experimental/cua/src/protocol.ts')
-  assert.match(protocol, /deliveryMode/)
-  // 能力声明。
-  assert.match(read(root, 'packages/experimental/cua/src/types.ts'), /deliveryModes/)
-  assert.match(read(root, 'packages/experimental/cua-windows/src/index.ts'), /deliveryModes/)
-  assert.match(read(root, 'packages/experimental/cua-windows/src/guidance.ts'), /DELIVERY_GUIDANCE/)
-  // 原生：PostMessage 声明 + 后台分支 + 白名单。
-  const win32 = read(root, 'packages/experimental/cua-windows/native/entry/Win32.cs')
-  assert.match(win32, /PostMessage/)
-  assert.match(win32, /ScreenToClient/)
-  assert.match(win32, /GetClassName/)
-  const executor = read(root, 'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs')
-  assert.match(executor, /deliveryMode/)
-  assert.match(executor, /ClickBackground/)
-  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
-  assert.match(input, /BACKGROUND_UNAVAILABLE/, '不支持后台的目标必须显式拒绝，不能静默升前台')
-  assert.match(input, /BackgroundRootClasses/, '后台投递必须是白名单，不是黑名单')
-  assert.match(input, /"#32770"/, '根窗口白名单必须点名标准对话框类')
-  assert.match(input, /BackgroundControlClasses/)
-  assert.match(input, /SysListView32/, '标准控件类要在白名单里')
-  assert.match(input, /GetWindowThreadProcessId/, '命中窗口必须校验归属进程')
-  assert.doesNotMatch(input, /BackgroundRejectedClasses/, '黑名单写法必须已经移除')
-  assert.match(input, /using System\.Text;/)
-})
-
-// 模型看到的是 guidance 文本（运行时的 `cua_get_api_reference` 就返回它）：
-// schema 里有 deliveryMode 但文档不写，模型就不会用——真机验收已经踩过一次。
-test('patch：guidance 把 click 的 deliveryMode 与后台拒绝语义写进模型文档', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const guidance = read(root, 'packages/experimental/cua/src/guidance.ts')
-  // 签名：必须作为 click 的 options 出现，而不是另起一行的方法。
-  assert.match(guidance, /- click\(target: string \| \[number, number\], options\?: \{[^}]*deliveryMode\?: 'background' \| 'foreground'[^}]*\}\) -> ActionResult/)
-  // 三句说明：默认前台 / 只在能力声明时有效且仅限列出的 Win32 类 / 拒绝且绝不回退。
-  assert.match(guidance, /Delivery defaults to 'foreground'\./)
-  assert.match(guidance, /'background' is only meaningful when getCapabilities\(\) lists 'background' in deliveryModes/)
-  assert.match(guidance, /returns BACKGROUND_UNAVAILABLE, and background delivery never falls back to the foreground path\./)
-  // 幂等与不重复：每条说明只出现一次。
-  assert.equal(guidance.split("Delivery defaults to 'foreground'.").length - 1, 1)
-  assert.equal(guidance.split('BACKGROUND_UNAVAILABLE').length - 1, 1)
-  assert.equal(guidance.split("deliveryMode?: 'background' | 'foreground'").length - 1, 1)
-  // 模板串没有被破坏：整行仍在同一个 COMMON_GUIDANCE 里，且没有引入反引号以外的插值。
-  assert.match(guidance, /export const COMMON_GUIDANCE = `Use cua to observe/)
-  assert.doesNotMatch(guidance, /\$\{DELIVERY_GUIDANCE\}/, '宿主 guidance 不引用平台常量，说明文字必须是字面量')
-})
-
-/**
- * P0（真机）：background 打一个完全离屏的 #32770，把 native 宿主整个弄死。
- * 根因不是 PostMessage 本身，而是后台分支入口先调了 UIA 快照（RequireObservation → RequireCurrent →
- * DesktopWindows.ResolveWindow）：同步 UIA 调用对离屏窗口会阻塞，30 秒请求超时打不断同步调用，
- * NativeServer 的清理宽限期到点就 Fatal("NATIVE_CLEANUP", …) 主动终止宿主。
- * 所以后台路径的入口预检必须是纯 User32，且必须排在任何 UIA / PostMessage 之前。
- */
-function clickBackgroundSegment(input) {
-  const start = input.indexOf('internal static void ClickBackground')
-  const end = input.indexOf('private const uint MonitorDefaultToNearest')
-  assert.ok(start > 0 && end > start, 'ClickBackground 实现与它的常量必须都存在')
-  return input.slice(start, end)
+function cli(...args) {
+  return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' })
 }
 
-test('patch：后台投递在碰 UIA 之前拒绝离屏/最小化窗口（宿主不能因此退出）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const win32 = read(root, 'packages/experimental/cua-windows/native/entry/Win32.cs')
-  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
-  const segment = clickBackgroundSegment(input)
+/** 本机受限沙箱会以 EPERM 拒绝 spawn 子进程；那不是脚本的问题，但也绝不能算通过。 */
+const spawnBlocked = (() => {
+  const probe = cli('--help')
+  return probe.error?.code === 'EPERM'
+})()
 
-  // 1. 后台分支不得调用任何 UIA：同步阻塞会把宿主拖到清理超时。
-  assert.doesNotMatch(segment, /RequireObservation|RequireCurrent|Accessibility|ResolveWindow|mta\.Invoke/,
-    'background 路径不得调用 UIA，否则离屏窗口会阻塞到清理宽限期，宿主自杀')
-  // 2. 入口预检必须是纯 User32，并且真的判「看不见」。
-  assert.match(segment, /Win32\.IsIconic\(handle\)/, '最小化的窗口要在入口就拒绝')
-  assert.match(segment, /Win32\.IsWindowVisible\(handle\)/, '不可见窗口要在入口就拒绝')
-  assert.match(segment, /Win32\.GetWindowRect\(handle, out var frame\)/, '几何必须从 User32 取，不走 UIA 观察')
-  assert.match(segment, /Win32\.MonitorFromWindow\(handle, MonitorDefaultToNearest\)/)
-  assert.match(segment, /Win32\.GetMonitorInfo\(monitor, ref info\)/)
-  assert.match(segment, /Intersect\(frame, info\.Work\)/, '窗口矩形必须与显示器工作区求交')
-  assert.match(segment, /outside every monitor visible work area/, '离屏拒绝文案要说明原因')
-  assert.match(segment, /target window is minimized/)
-  // 2b. 命中解析不得用 WindowFromPoint：它会向目标线程发 WM_NCHITTEST，同步等不到取消，
-  // 清理宽限期一到 NativeServer 就 Fatal；改用只做几何判断的 ChildWindowFromPointEx 逐层下探。
-  assert.doesNotMatch(segment, /Win32\.WindowFromPoint\s*\(/, '后台路径不得调用 WindowFromPoint（跨窗口命中测试会阻塞）；注释里提到它不算调用')
-  assert.match(segment, /var root = Win32\.GetAncestor\(handle, 2\);/)
-  assert.match(segment, /Win32\.ChildWindowFromPointEx\(hit, local, SkipInvisibleAndDisabled\)/)
-  assert.match(segment, /if \(child == 0 \|\| child == hit\) break;/)
-  assert.match(segment, /for \(var depth = 0; depth < 8; depth\+\+\)/, '下探必须有深度上限，不能在异常拓扑里死循环')
-  assert.doesNotMatch(segment, /ref probe/, 'ScreenToClient 会把入参原地改成客户区坐标，不能跨层复用同一个变量')
-  assert.match(segment, /point = local;/)
-  assert.match(input, /private const uint SkipInvisibleAndDisabled = 0x0001 \| 0x0002 \| 0x0004;/, '跳过标志要覆盖不可见/禁用/透明')
-  // 3. 顺序：预检 → 命中校验 → 白名单 → PostMessage。任何一步颠倒都可能放行离屏目标。
-  const at = (needle) => {
-    const index = segment.indexOf(needle)
-    assert.ok(index >= 0, `缺少必要片段: ${needle}`)
-    return index
+test('真实固定上游：--check 干净，9 个文件全 pristine', { skip: haveUpstream ? false : missingUpstream }, () => {
+  const { report, problems } = checkUpstream(UPSTREAM)
+  assert.deepEqual(problems, [], 'pin 的上游不该有任何本地注入残留')
+  assert.equal(report.length, 9)
+  assert.ok(report.every((line) => line.endsWith(': pristine')), report.join('\n'))
+})
+
+test('多余文件（本地注入的整份源码）会被指出', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  writeFileSync(join(root, CUA, 'src', 'cua-dispatch.ts'), 'export const x = 1\n')
+  const { problems } = checkUpstream(root)
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /cua-dispatch\.ts: 文件存在/u)
+})
+
+test('注入标识会被指出（逐文件）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  const file = join(root, CUA, 'src', 'protocol.ts')
+  writeFileSync(file, readFileSync(file, 'utf8') + "\n// deliveryMode\n")
+  const { problems } = checkUpstream(root)
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /protocol\.ts: 含本地注入标识 deliveryMode/u)
+})
+
+test('缺文件会被指出，而不是当成干净', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  rmSync(join(root, WINDOWS, 'native', 'entry', 'Win32.cs'))
+  const { problems } = checkUpstream(root)
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /Win32\.cs: 文件缺失/u)
+})
+
+test('审计是只读的：跑两次结果一致、不改任何字节', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  const before = readFileSync(join(root, CUA, 'src', 'index.ts'), 'utf8')
+  const first = checkUpstream(root)
+  const second = checkUpstream(root)
+  assert.deepEqual(second, first)
+  assert.equal(readFileSync(join(root, CUA, 'src', 'index.ts'), 'utf8'), before)
+})
+
+test('摘要形状：sha256: 前缀 + 64 位小写十六进制，逐文件同形状', { skip: haveUpstream ? false : missingUpstream }, () => {
+  const { digest, files } = hashNativeTree(UPSTREAM)
+  assert.match(digest, /^sha256:[0-9a-f]{64}$/u)
+  const keys = Object.keys(files)
+  assert.ok(keys.length > 0)
+  for (const key of keys) {
+    assert.match(files[key], /^sha256:[0-9a-f]{64}$/u, key)
+    assert.equal(key.includes('\\'), false, `键必须用 / 分隔：${key}`)
   }
-  assert.ok(at('Win32.IsIconic(handle)') < at('MonitorFromWindow'), '最小化检查必须在监视器解析之前')
-  assert.ok(at('Intersect(frame, info.Work)') < at('Win32.GetAncestor(handle, 2)'), '离屏检查必须早于根类判定')
-  assert.ok(at('Win32.GetAncestor(handle, 2)') < at('Array.IndexOf(BackgroundRootClasses'), '根类判定必须前置到任何跨窗口查询之前')
-  assert.ok(at('Array.IndexOf(BackgroundRootClasses') < at('ChildWindowFromPointEx'), '根类不在白名单时绝不能进入下探')
-  assert.ok(at('ChildWindowFromPointEx') < at('Post(hit, messages.Down'), '命中与控件白名单校验必须早于投递')
-  assert.ok(at('BackgroundRootClasses, rootName') < at('Post(hit, messages.Down'))
-  assert.ok(at('BackgroundControlClasses, name') < at('Post(hit, messages.Down'))
-  // 4. 投递后的复核同样只用 User32（进程 + 几何），不回到 UIA。
-  const tail = segment.slice(at('Post(hit, messages.Down'))
-  assert.match(tail, /Win32\.IsWindow\(handle\)/)
-  assert.match(tail, /Win32\.GetWindowThreadProcessId\(handle, out var ownerProcess\)/)
-  assert.match(tail, /Win32\.GetWindowRect\(handle, out var after\)/)
-  // 5. 原生声明：监视器工作区所需的 P/Invoke 与结构必须存在且与真实签名一致。
-  assert.match(win32, /internal static extern nint MonitorFromWindow\(nint window, uint flags\)/)
-  assert.match(win32, /internal static extern nint ChildWindowFromPointEx\(nint parent, Point point, uint flags\)/)
-  assert.match(win32, /internal static extern bool GetMonitorInfo\(nint monitor, ref MonitorInfo info\)/)
-  assert.match(win32, /internal struct MonitorInfo\s*\{\s*internal int Size; internal Rect Monitor; internal Rect Work; internal uint Flags;/)
-  assert.match(input, /private const uint MonitorDefaultToNearest = 2;/)
 })
 
-test(`patch：逐层下探每层都从屏幕坐标重算（两层嵌套几何不会把第一层结果再转一次）`, { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('摘要稳定：同一棵树两次相同', { skip: haveUpstream ? false : missingUpstream }, () => {
+  assert.equal(hashNativeTree(UPSTREAM).digest, hashNativeTree(UPSTREAM).digest)
+})
+
+test('摘要随 native 源码变化：改一个 .cs 就必须变', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
-  const segment = clickBackgroundSegment(input)
-
-  // 6. 结构：ScreenToClient 的入参每层都必须先被重置成屏幕坐标。
-  const loopStart = segment.indexOf('for (var depth = 0; depth < 8; depth++)')
-  assert.ok(loopStart >= 0, '下探循环缺失')
-  const loopEnd = segment.indexOf('}', segment.indexOf('if (child == 0 || child == hit) break;'))
-  const body = segment.slice(loopStart, loopEnd)
-  const reset = body.indexOf('local = screen;')
-  const convert = body.indexOf('Win32.ScreenToClient(hit, ref local)')
-  assert.ok(reset >= 0, '循环体里缺 `local = screen;`：第二层会拿客户区坐标当屏幕坐标')
-  assert.ok(convert >= 0, '循环体里缺 ScreenToClient(hit, ref local)')
-  assert.ok(reset < convert, '`local = screen;` 必须在 ScreenToClient 之前')
-
-  // 7. 数值：两层嵌套几何下的算术结果。ScreenToClient 是原地换算，所以只要跨层复用就会偏移两次。
-  const frames = new Map([
-    ['root', { origin: [100, 100], child: 'panel' }],
-    ['panel', { origin: [120, 120], child: 'button' }],
-    ['button', { origin: [126, 132], child: null }],
-  ])
-  const screenPoint = [130, 150]
-  const toClient = (name, point) => {
-    const { origin } = frames.get(name)
-    return [point[0] - origin[0], point[1] - origin[1]]
-  }
-  const inside = (local) => local[0] >= 0 && local[1] >= 0 && local[0] < 200 && local[1] < 200
-  // 生成代码的做法：每层从同一个屏幕坐标重算。
-  const correct = () => {
-    let hit = 'root'
-    let local = screenPoint
-    for (let depth = 0; depth < 8; depth += 1) {
-      local = screenPoint
-      const candidate = toClient(hit, local)
-      if (!inside(candidate)) break
-      const child = frames.get(hit).child
-      if (child === null) { local = candidate; break }
-      local = candidate
-      hit = child
-    }
-    return { hit, local }
-  }
-  // 旧写法：跨层复用 probe（已被原地改成客户区坐标）。
-  const buggy = () => {
-    let hit = 'root'
-    let probe = screenPoint
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = toClient(hit, probe)
-      probe = candidate
-      if (!inside(candidate)) break
-      const child = frames.get(hit).child
-      if (child === null) break
-      hit = child
-    }
-    return { hit, local: probe }
-  }
-  const good = correct()
-  const bad = buggy()
-  assert.deepEqual(good, { hit: 'button', local: [4, 18] }, '最深一层客户区坐标应是屏幕点减去最内层原点')
-  assert.notDeepEqual(bad.local, good.local, '跨层复用会让第二层起算到窗口外——这正是要防的静默错点')
-  // 生成的代码把 local 拼进 lParam：低位 X、高位 Y。
-  assert.match(segment, /var lparam = \(nint\)\(\(point\.Y << 16\) \| \(point\.X & 0xFFFF\)\);/,'lParam 必须由最终客户区坐标拼出')
-  const lparam = (good.local[1] << 16) | (good.local[0] & 0xffff)
-  const buggyLparam = (bad.local[1] << 16) | (bad.local[0] & 0xffff)
-  assert.notStrictEqual(lparam, buggyLparam)
-  assert.strictEqual((lparam >> 16) & 0xffff, 18)
-  assert.strictEqual(lparam & 0xffff, 4)
+  const before = hashNativeTree(root).digest
+  const file = join(root, WINDOWS, 'native', 'entry', 'Input.cs')
+  writeFileSync(file, readFileSync(file, 'utf8') + '\n// touched\n')
+  assert.notEqual(hashNativeTree(root).digest, before, '改了 native 源码却得到同一个摘要 —— helper 的身份就失去意义')
 })
 
-test('patch：预检不误伤在屏标准控件（#32770 对话框 + SysTreeView32 仍走白名单）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('摘要跳过 bin/obj：构建产物不进 build identity', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
-  const segment = clickBackgroundSegment(input)
-  // 白名单数组声明在方法之外，所以对整份 Input.cs 断言内容。
-  assert.match(input, /"#32770", \/\/ 标准对话框/)
-  assert.match(input, /"Button", "Edit", "Static", "ComboBox", "ComboBoxEx32", "RichEdit20W", "RichEdit50W",/)
-  assert.match(input, /"SysListView32", "SysTreeView32", "SysHeader32", "ToolbarWindow32", "ReBarWindow32",/)
-  // 预检只判可见性，不判类名：类名判定仍在命中点之后，避免把在屏对话框挡掉。
-  assert.ok(segment.indexOf('Win32.IsIconic(handle)') < segment.indexOf('Array.IndexOf(BackgroundRootClasses'))
-})
-
-test('patch：guidance 说明离屏/最小化会被入口拒绝（模型可预期，不靠猜）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const hostGuidance = read(root, 'packages/experimental/cua/src/guidance.ts')
-  const platformGuidance = read(root, 'packages/experimental/cua-windows/src/guidance.ts')
-  const sentence = /A minimized, hidden, or entirely off-screen window is rejected before any message is posted/
-  assert.match(hostGuidance, sentence)
-  assert.match(platformGuidance, sentence)
-  // 仍然只说一次 BACKGROUND_UNAVAILABLE，新句子不重复那个码。
-  assert.equal(hostGuidance.split('BACKGROUND_UNAVAILABLE').length - 1, 1)
-})
-
-/**
- * 程序绑定（`cua_run_code` 走的这条）必须把 deliveryMode 原样带进 native 参数。
- * 只改工具层 schema 不够：`api.js` 的 click 构造会丢掉未透传的字段，真机就是这样退回前台的。
- */
-function assertApiClickDelivery(text) {
-  assert.match(text, /const delivery = options\?\.deliveryMode === undefined \? \{\} : \{ deliveryMode: options\.deliveryMode \}/,
-    'click 必须先把 deliveryMode 收成一个可选片段')
-  assert.match(text, /\.\.\.relative, \.\.\.delivery, elementId: targetPoint/,
-    'element 分支也要 spread delivery')
-  assert.match(text, /x, y, mouseButton, clickCount, \.\.\.modifiers, \.\.\.hold, \.\.\.relative, \.\.\.delivery \}\)/,
-    'coordinate 分支也要 spread delivery')
-}
-
-/** 调用点能写 deliveryMode 的前提：`CuaClickOptions` 从 click 参数里挑出这个键。 */
-function assertClickOptionsType(text) {
-  assert.match(text, /Pick<CuaParameters<'click'>, 'mouseButton' \| 'clickCount' \| 'modifiers' \| 'holdMs' \| 'deliveryMode'>/,
-    'CuaClickOptions 必须接受 deliveryMode，否则调用点类型不通')
-}
-
-test('patch：窗口 click 把 deliveryMode 透传到 native（两个分支都 spread）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  assertApiClickDelivery(read(root, 'packages/experimental/cua/src/api.ts'))
-  assertClickOptionsType(read(root, 'packages/experimental/cua/src/types.ts'))
-  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/api.ts'), /deliveryMode: undefined/,
-    '不能把 undefined 显式塞进参数')
-})
-
-// 负控制：同一组断言打在**未打补丁**的源上必须失败——否则这条测试是装饰品。
-test('patch：未打补丁的 api.ts / types.ts 过不了 deliveryMode 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
-  const rawApi = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
-  const rawTypes = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/types.ts'), 'utf8')
-  assert.throws(() => assertApiClickDelivery(rawApi), /click 必须先把 deliveryMode 收成一个可选片段/)
-  assert.throws(() => assertClickOptionsType(rawTypes), /CuaClickOptions 必须接受 deliveryMode/)
-})
-
-test('patch：第二次执行是幂等的（0 edits，文件内容不变）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const before = TARGETS.map((rel) => read(root, rel))
-  const parts = patchCuaUiLocateBridge(root)
-  assert.ok(parts.every((line) => line.endsWith(': 0 edits')), parts.join(' | '))
-  assert.deepEqual(TARGETS.map((rel) => read(root, rel)), before)
-})
-
-test('check：只读校验不写盘；打完补丁后全部 applied/present', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  const pending = patchCuaUiLocateBridge(root, { check: true })
-  assert.ok(pending.some((line) => line.endsWith(': to copy')), '未打补丁时应报告待注入文件')
-  for (const rel of TARGETS) assert.equal(read(root, rel), readFileSync(join(UPSTREAM, rel), 'utf8'), `${rel} 不得被 check 改动`)
-
-  patchCuaUiLocateBridge(root)
-  const applied = patchCuaUiLocateBridge(root, { check: true })
-  assert.ok(applied.every((line) => /: (applied|present)$/.test(line)), applied.join(' | '))
-})
-
-// ── 失败形态：必须响亮，不能悄悄放过 ───────────────────────────────────────
-
-test('patch：锚点消失时响亮失败，且不写坏文件', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  const anchor = 'yield installCuaTools(ctx, config, tool, guidance, programGuidance)'
-  const file = join(root, 'packages/experimental/cua/src/index.ts')
-  const original = readFileSync(file, 'utf8')
-  assert.ok(original.includes(anchor))
-  writeFileSync(file, original.replace(`    ${anchor}\n`, '    // anchor removed by test\n'))
-  assert.throws(() => patchCuaUiLocateBridge(root), /expected exactly 1 occurrence/)
-  assert.equal(readFileSync(file, 'utf8').includes('// anchor removed by test'), true, '失败后原文件保持原样')
-})
-
-test('patch：同一个锚点出现两次也拒绝（不能瞎猜打哪儿）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  const file = join(root, 'packages/experimental/cua/src/index.ts')
-  const lines = readFileSync(file, 'utf8').split('\n')
-  const at = lines.findIndex((line) => line.includes('yield installCuaTools(ctx, config, tool, guidance, programGuidance)'))
-  assert.ok(at >= 0)
-  // 复制「锚点 + 收尾」两行，制造出第二处完整匹配。
-  const duplicated = lines.slice(at, at + 2).join('\n')
-  writeFileSync(file, `${lines.join('\n')}\n${duplicated}\n`)
-  assert.throws(() => patchCuaUiLocateBridge(root), /expected exactly 1 occurrence/)
-})
-
-test('patch：目标文件缺失即失败（根目录不对时不能假装成功）', (t) => {
-  const dir = mkdtempSync(join(REPO, '_skadi_temp', 'patch-empty-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  assert.throws(() => patchCuaUiLocateBridge(dir), /ENOENT|no such file/)
-})
-
-// ── helper 源码身份 ─────────────────────────────────────────────────────────
-
-test('hashNativeTree：稳定、随 native 补丁变化、跳过 bin/obj', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  mkdirSync(join(root, 'packages/experimental/cua-windows/native/entry/bin/Debug'), { recursive: true })
-  writeFileSync(join(root, 'packages/experimental/cua-windows/native/entry/bin/Debug/junk.dll'), 'ignored')
-
   const before = hashNativeTree(root)
-  assert.match(before.digest, /^sha256:[0-9a-f]{64}$/)
-  assert.equal(before.digest, hashNativeTree(root).digest, '同一棵树必须给出同一个摘要')
-  assert.ok(!Object.keys(before.files).some((key) => key.startsWith('entry/bin')), 'bin/ 不得进摘要')
-
-  patchCuaUiLocateBridge(root)
+  mkdirSync(join(root, WINDOWS, 'native', 'bin', 'win-x64'), { recursive: true })
+  mkdirSync(join(root, WINDOWS, 'native', 'obj', 'x'), { recursive: true })
+  writeFileSync(join(root, WINDOWS, 'native', 'bin', 'win-x64', 'dsh-cua-windows.exe'), 'binary')
+  writeFileSync(join(root, WINDOWS, 'native', 'obj', 'x', 'a.dll'), 'binary')
   const after = hashNativeTree(root)
-  assert.notEqual(after.digest, before.digest, '打过 native 补丁的 helper 源码摘要必须变')
-  assert.equal(after.files['entry/Input.cs'], hashNativeTree(root).files['entry/Input.cs'])
-  assert.deepEqual(Object.keys(after.files), Object.keys(before.files).sort(), '补丁只改内容，不新增/删除文件')
-  assert.notEqual(after.files['entry/Input.cs'], before.files['entry/Input.cs'])
+  assert.equal(after.digest, before.digest)
+  assert.deepEqual(Object.keys(after.files), Object.keys(before.files))
 })
 
-// ── 分发面校验（纯判定，直接执行 .ts） ─────────────────────────────────────
+test('CLI：干净树 --check exit 0，污染树 exit 1', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  if (spawnBlocked) return t.skip('本机沙箱禁止 spawn 子进程（EPERM），CLI 退出码只能在 CI 上验证')
 
-const agent = { id: 'agent-1' }
-const agents = new Map([['agent-1', agent]])
-// 执行器铸造的 token 是真 symbol；测试里用一个 symbol 代表同一件事。
-const token = Symbol('tools/execute')
-const liveExecution = (overrides = {}) => ({ callId: 'call-1', token, agent, signal: new AbortController().signal, ...overrides })
-/** 登记进活跃表，模拟 tools/execute 包装器进入时的状态。 */
-function registered(registry, overrides = {}) {
-  const execution = liveExecution(overrides)
-  registry.begin(execution)
-  return execution
-}
+  const clean = cli(UPSTREAM, '--check')
+  assert.equal(clean.status, 0, clean.stderr)
+  assert.match(clean.stdout, /干净 — 0 pending/u)
 
-test('guard：接受本次调用真实持有、且正在执行的 execution', () => {
-  const registry = new LiveDispatchRegistry()
-  const execution = registered(registry)
-  const checked = checkDispatch(registry, agents, execution)
-  assert.equal(checked.callId, 'call-1')
-  assert.equal(registry.has(execution), true)
-  assert.equal(registry.size, 1)
-})
-
-test('guard：调用结束后的 execution 被拒（哪怕字段一模一样、token 也抄走）', () => {
-  const registry = new LiveDispatchRegistry()
-  const execution = registered(registry)
-  checkDispatch(registry, agents, execution)
-  registry.end(execution)
-  assert.equal(registry.size, 0)
-  assert.throws(() => checkDispatch(registry, agents, execution), /not an active call/)
-  assert.throws(() => checkDispatch(registry, agents, { ...execution }), /not an active call/, '复制对象不是执行器给的那一个')
-})
-
-test('guard：没有执行器铸造的 token 一律拒收（伪造壳）', () => {
-  const registry = new LiveDispatchRegistry()
-  for (const overrides of [{ token: undefined }, { token: 'tools/execute' }, { token: 1 }]) {
-    const execution = registered(registry, overrides)
-    assert.throws(() => checkDispatch(registry, agents, execution), /minted by the tool executor/)
-  }
-})
-
-test('guard：拒收未登记、字段坏掉的壳', () => {
-  const registry = new LiveDispatchRegistry()
-  const loose = liveExecution()
-  assert.throws(() => checkDispatch(registry, agents, undefined), DispatchRejection)
-  assert.throws(() => checkDispatch(registry, agents, {}), DispatchRejection)
-  assert.throws(() => checkDispatch(registry, agents, { ...loose }), /not an active call/, '没登记过的对象不能过')
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { callId: '' })), /call id/)
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { callId: 7 })), /call id/)
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { agent: { id: 'agent-1' } })), /no longer live/, '同 id 的另一个对象不是那个 agent')
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { agent: { id: 'ghost' } })), /no longer live/)
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { agent: undefined })), /agent-owned/)
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { signal: undefined })), /cancellation signal/)
-  assert.throws(() => checkDispatch(registry, agents, registered(registry, { signal: { aborted: false } })), /cancellation signal/, '假 signal 不能过')
-})
-
-test('guard：已撤销的调用不能借用分发面', () => {
-  const registry = new LiveDispatchRegistry()
-  const controller = new AbortController()
-  const execution = registered(registry, { signal: controller.signal })
-  controller.abort()
-  assert.throws(() => checkDispatch(registry, agents, execution), /abort/i)
-})
-
-// ── 共享输入队列 ───────────────────────────────────────────────────────────
-
-test('queue：按到达顺序串行，一次只放行一个', async () => {
-  const queue = new SystemInputQueue()
-  const order = []
-  const release1 = await queue.acquire()
-  order.push('first')
-  const second = queue.acquire().then((release) => {
-    order.push('second')
-    return release
-  })
-  assert.equal(queue.busy, true)
-  assert.equal(queue.pending, 1)
-  release1()
-  const release2 = await second
-  assert.deepEqual(order, ['first', 'second'])
-  release2()
-  assert.equal(queue.busy, false)
-  assert.equal(queue.pending, 0)
-})
-
-test('queue：等待超过上限直接拒绝（有界，不无限堆）', async () => {
-  const queue = new SystemInputQueue()
-  const release = await queue.acquire()
-  const waiting = []
-  for (let index = 0; index < MAX_WAITING_INPUTS; index += 1) waiting.push(queue.acquire())
-  await assert.rejects(queue.acquire(), (error) => {
-    assert.ok(error instanceof InputQueueFullError)
-    assert.equal(error.code, 'INPUT_BUSY')
-    return true
-  })
-  release()
-  for (const entry of waiting) (await entry)()
-})
-
-test('queue：排队中被取消的输入永不执行', async () => {
-  const queue = new SystemInputQueue()
-  const release = await queue.acquire()
-  const controller = new AbortController()
-  let ran = false
-  const cancelled = queue.acquire(controller.signal).then(() => { ran = true })
-  controller.abort()
-  await assert.rejects(cancelled, /abort/i)
-  assert.equal(queue.pending, 0)
-  release()
-  assert.equal(ran, false)
-  // 槽位没有被取消者占死：下一个仍能拿到。
-  const next = await queue.acquire()
-  next()
-})
-
-test('queue：释放是幂等的，重复释放不会多放行一个', async () => {
-  const queue = new SystemInputQueue()
-  const release = await queue.acquire()
-  release()
-  release()
-  const a = await queue.acquire()
-  let secondRan = false
-  const b = queue.acquire().then((releaseB) => { secondRan = true; return releaseB })
-  await new Promise((resolve) => setTimeout(resolve, 10))
-  assert.equal(secondRan, false, 'a 还握着槽位')
-  a()
-  ;(await b)()
-})
-
-test('queue：释放时跳过已中止的等待者，把槽位交给下一个真正的等待者', async () => {
-  const queue = new SystemInputQueue()
-  const release = await queue.acquire()
-  const controller = new AbortController()
-  const cancelled = queue.acquire(controller.signal)
-  let ran = false
-  const waiting = queue.acquire().then((releaseNext) => { ran = true; return releaseNext })
-  assert.equal(queue.pending, 2)
-  controller.abort()
-  await assert.rejects(cancelled, /abort/i)
-  assert.equal(queue.pending, 1, '中止者必须出队，不能占着位置')
-  assert.equal(ran, false, '槽位仍被正在执行的那个握着')
-  release()
-  const releaseNext = await waiting
-  assert.equal(ran, true)
-  releaseNext()
-  assert.equal(queue.busy, false)
-  assert.equal(queue.pending, 0)
-})
-
-// ── 生成代码与真实 P/Invoke 签名的一致性（CS0023 的防线） ──────────────────
-//
-// 补丁生成的是 C#，本机没有 SDK 编译它。所以这里退一步，做**结构性**校验：
-// 从真实上游 `Win32.cs` 读每个 `internal static extern` 的返回类型，再对生成代码里
-// 每个 `!Win32.X(...)` / `if (Win32.X(...))` 断言 X 真的返回 bool、且带
-// `[return: MarshalAs(UnmanagedType.Bool)]`。
-// CI 首轮就栽在 `!Win32.GetWindowThreadProcessId(...)` 上——它返回 uint（线程 id）。
-
-/** 解析 `Win32.cs`：方法名 → { returns, declaration }。 */
-function win32Signatures(root) {
-  const file = join(root, 'packages/experimental/cua-windows/native/entry/Win32.cs')
-  const text = readFileSync(file, 'utf8')
-  const signatures = new Map()
-  const pattern = /internal static extern\s+([A-Za-z_][\w.<>[\]?]*)\s+([A-Za-z_]\w*)\s*\(/g
-  for (const match of text.matchAll(pattern)) {
-    const start = text.lastIndexOf('\n', match.index) + 1
-    const end = text.indexOf('\n', match.index)
-    signatures.set(match[2], { returns: match[1], declaration: text.slice(start, end < 0 ? text.length : end) })
-  }
-  return signatures
-}
-
-test('生成的原生代码：对 Win32.X 取反/当布尔用时，X 必须真的返回 bool', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const signatures = win32Signatures(root)
-
-  assert.ok(signatures.has('GetWindowThreadProcessId'), '上游 Win32.cs 应当已有这个声明')
-  assert.equal(signatures.get('GetWindowThreadProcessId').returns, 'uint',
-    '它返回线程 id（uint），不是 bool —— 任何 ! 取反都会 CS0023')
-
-  for (const rel of ['packages/experimental/cua-windows/native/entry/Input.cs', 'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs']) {
-    const text = read(root, rel)
-    // 只认无歧义的取反：`!Win32.X(...)`。像 `if (Win32.SendInput(...) != n)` 这种比较
-    // 本身已经是 bool，不属于这一类。
-    for (const match of text.matchAll(/!\s*Win32\.(\w+)\s*\(/g)) {
-      const guarded = match[1]
-      const signature = signatures.get(guarded)
-      assert.ok(signature, `${rel} 用了不存在的 Win32.${guarded}（拼错或没声明）`)
-      assert.equal(signature.returns, 'bool', `${rel} 对 Win32.${guarded} 取反，但它返回 ${signature.returns} → 会 CS0023`)
-      assert.match(signature.declaration, /MarshalAs\(UnmanagedType\.Bool\)/,
-        `Win32.${guarded} 返回 bool 却缺 [return: MarshalAs(UnmanagedType.Bool)]，默认封送会读错返回值`)
-    }
-  }
+  writeFileSync(join(root, CUA, 'src', 'system-input-queue.ts'), 'export const y = 2\n')
+  const dirty = cli(root, '--check')
+  assert.equal(dirty.status, 1)
+  assert.match(dirty.stderr, /污染 — /u)
 })
 
-test('生成的 Input.cs：归属校验只看 out 的 pid，且不再对 GetWindowThreadProcessId 取反', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('CLI：污染树上 --digest 拒绝出值（不给半信半疑的摘要）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  if (spawnBlocked) return t.skip('本机沙箱禁止 spawn 子进程（EPERM），CLI 退出码只能在 CI 上验证')
+
   const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
-
-  assert.doesNotMatch(input, /!\s*Win32\.GetWindowThreadProcessId/, 'CS0023 的来源：uint 不能取反')
-  assert.match(input, /Win32\.GetWindowThreadProcessId\(hit, out var hitProcess\);/, '必须先调用再单独判 pid')
-  assert.match(input, /if \(hitProcess != \(uint\)window\.ProcessId\)/, '归属校验保留：pid 不同就 BACKGROUND_UNAVAILABLE')
-  // 语义没缩水：这条分支仍然抛 BACKGROUND_UNAVAILABLE，而不是静默继续。
-  assert.match(input, /hitProcess != \(uint\)window\.ProcessId\)\s*\n\s*throw new NativeFailure\("BACKGROUND_UNAVAILABLE"/)
-})
-test('注入的 TS 源码：`exactOptionalPropertyTypes` 下不把 undefined 显式塞进可选属性', () => {
-  // 上游 `tsconfig.base.json` 开了 exactOptionalPropertyTypes，`{ signal }` 这种写法
-  // 在 signal 可能是 undefined 时会 TS2375（CI 三个产物 job 的真实红因）。
-  const queue = readFileSync(new URL('../portable/cua-bridge-files/cua/system-input-queue.ts', import.meta.url), 'utf8')
-
-  assert.doesNotMatch(queue, /\{\s*resolve,\s*reject,\s*signal\s*\}/,
-    'Waiter 的可选 signal 不能直接赋值：TS2375')
-  assert.match(queue, /\.\.\.\(signal \? \{ signal \} : \{\}\)/,
-    'signal 只能条件展开，这样「没有 signal」就是缺字段而不是显式 undefined')
-  // 也不要用显式 undefined 绕过可选属性。
-
-  assert.doesNotMatch(queue, /signal:\s*undefined/, '不要用显式 undefined 绕过可选属性')
-})
-/** 本地 zod 探针目录（`_skadi_temp/zodprobe`，含 zod v4）；不存在就跳过行为测试，并说明原因。 */
-const ZOD_PROBE = join(REPO, '_skadi_temp', 'zodprobe')
-const haveZod = existsSync(join(ZOD_PROBE, 'node_modules', 'zod', 'package.json'))
-const missingZod = '本地没有 zod：在 _skadi_temp/zodprobe 里 npm install zod@4 后再跑（CI 无依赖，跳过并说明）'
-
-/** capabilities 的原生骨架：provider 只额外补 deliveryModes，其余字段 native 都会给。 */
-const CAPABILITIES_BASE = {
-  platform: 'windows',
-  permissions: { accessibility: true, screenRecording: true },
-  appLevelAccessibility: false,
-  keyboard: ['window'],
-  sessionLocked: false,
-  methods: ['click', 'screenshot'],
-  coordinateSpace: 'screenshot-pixels',
-  browser: false,
-}
-
-test('patch：deliveryModes 从原始响应读出并挂回能力对象，公共类型不动', { skip: haveUpstream ? false : missingUpstream }, (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const api = read(root, 'packages/experimental/cua/src/api.ts')
-
-  // 读出来的值必须校验过：只认枚举里的字符串，别把 provider 顺手塞的东西带进来。
-  assert.match(api, /function readDeliveryModes\(value: JsonValue\): \('background' \| 'foreground'\)\[\] \| undefined \{/,
-    'api.ts 要有 readDeliveryModes')
-  assert.match(api, /mode === 'background' \|\| mode === 'foreground'/, '只收枚举内的值')
-  assert.match(api, /return modes\.length === 0 \? undefined : modes/, '空数组等于没声明')
-  assert.match(api, /capabilities = declared === undefined \? parsed : Object\.assign\(parsed, \{ deliveryModes: declared \}\)/,
-    '声明了才挂上去')
-
-  // schema 里绝不能有 deliveryModes：zod 的 .optional() 推断出 `| undefined`，CuaCapabilities 就不满足 JsonValue（真 CI 的 TS2322）。
-  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/protocol.ts'), /deliveryModes/,
-    'CapabilitiesResult 不能声明这个字段')
-  // 反向也要守住：不能靠 passthrough 绕过（zod v4 的 passthrough 会给输出类型加 unknown 索引签名，同样撞 JsonValue）。
-  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/protocol.ts'), /\.passthrough\(\)/,
-    'passthrough 会让输出类型多出 unknown 索引签名')
-
-  const index = read(root, 'packages/experimental/cua/src/index.ts')
-  assert.match(index, /\.\.\.\(capabilities\.deliveryModes === undefined \? \{\} : \{ deliveryModes: \[\.\.\.capabilities\.deliveryModes\] \}\),/,
-    'provider 声明了才合并进 getCapabilities 响应')
-  assert.doesNotMatch(index, /\?\? \['foreground'\]/, '不能用缺省值把「未声明」伪装成支持')
-})
-
-// 负控制：同一组结构断言打在未打补丁的真实上游上必须失败。
-test('patch：未打补丁的 api.ts / index.ts 过不了 deliveryModes 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
-  const rawApi = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
-  const rawIndex = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/index.ts'), 'utf8')
-  assert.doesNotMatch(rawApi, /readDeliveryModes/, '上游 api.ts 本来不读这个键')
-  assert.doesNotMatch(rawIndex, /deliveryModes/, '上游 callNative 的 getCapabilities 合并本来不碰它')
-})
-
-/** 把打过补丁的 protocol.ts / api.ts 拷进本地 zod 探针目录并 import 回来（目录里已有 zod 与 type:module）。 */
-async function loadCuaApiFrom(root, label) {
-  const name = `api-${label}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
-  const protocolTarget = join(ZOD_PROBE, `${name}-protocol.ts`)
-  const apiTarget = join(ZOD_PROBE, `${name}-api.ts`)
-  writeFileSync(protocolTarget, readFileSync(join(root, 'packages/experimental/cua/src/protocol.ts'), 'utf8'))
-  // api.ts 用相对路径 import './protocol.ts'，两条都拷进同一目录后名字必须对得上。
-  writeFileSync(apiTarget, readFileSync(join(root, 'packages/experimental/cua/src/api.ts'), 'utf8')
-    .replace("from './protocol.ts'", `from './${name}-protocol.ts'`))
-  try {
-    const mod = await import(new URL(`./${name}-api.ts`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)
-    return mod.createCuaApi
-  } finally {
-    rmSync(protocolTarget, { force: true })
-    rmSync(apiTarget, { force: true })
-  }
-}
-
-/** 一个只回答 getCapabilities 的假分发面；provider 合并后的响应长这样。 */
-const dispatchReturning = (payload) => async () => payload
-
-// 行为测试：真的跑补丁产物的 api.ts，不是只读文本。
-test('behavior：声明了就出现在 getCapabilities() 里，没声明就没有这个键', { skip: haveZod ? false : missingZod }, async (t) => {
-  const root = mirror(t)
-  patchCuaUiLocateBridge(root)
-  const createCuaApi = await loadCuaApiFrom(root, 'patched')
-
-  const declared = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })).getCapabilities()
-  assert.deepEqual(declared.deliveryModes, ['foreground', 'background'])
-
-  const undeclared = await createCuaApi(dispatchReturning(CAPABILITIES_BASE)).getCapabilities()
-  assert.equal('deliveryModes' in undeclared, false, '没声明就该没有这个键，而不是 [] 或 undefined')
-
-  // 脏数据不进门：非枚举值被过滤掉，全被过滤就等于没声明。
-  const dirty = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['background', 'teleport'] })).getCapabilities()
-  assert.deepEqual(dirty.deliveryModes, ['background'])
-  const junk = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: 'yes' })).getCapabilities()
-  assert.equal('deliveryModes' in junk, false, '不是数组就当没声明')
-
-  // 负控制：未打补丁的 api.ts 即使拿到同样响应，也读不到这个键。
-  const rawCreateCuaApi = await (async () => {
-    const name = `raw-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
-    const protocolTarget = join(ZOD_PROBE, `${name}-protocol.ts`)
-    const apiTarget = join(ZOD_PROBE, `${name}-api.ts`)
-    writeFileSync(protocolTarget, readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'utf8'))
-    writeFileSync(apiTarget, readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
-      .replace("from './protocol.ts'", `from './${name}-protocol.ts'`))
-    try {
-      return (await import(new URL(`./${name}-api.ts`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)).createCuaApi
-    } finally {
-      rmSync(protocolTarget, { force: true })
-      rmSync(apiTarget, { force: true })
-    }
-  })()
-  const stripped = await rawCreateCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })).getCapabilities()
-  assert.equal('deliveryModes' in stripped, false, '未打补丁的 api.ts 会把 provider 声明的能力丢掉')
+  const file = join(root, WINDOWS, 'native', 'entry', 'Input.cs')
+  writeFileSync(file, readFileSync(file, 'utf8') + '\n// ClickBackground\n')
+  const result = cli(root, '--digest')
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /拒绝在被污染的树上生成 native 摘要/u)
+  assert.doesNotMatch(result.stdout, /"kind":"cua-helper-native-source"/u)
 })
