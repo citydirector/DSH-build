@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchUbjsFile } from './patch-desktop-computer-use.mjs'
+import { normalizeNativeSource, sourceHelperDirectory, verifyInstalled, verifyPayload } from './cua-helper.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..')
@@ -48,6 +49,23 @@ function childEnvironment() {
 }
 
 function log(step, message) { console.log('[' + step + '] ' + message) }
+
+/**
+ * 取「打完补丁后的 native 源码树」摘要（桥接脚本 --digest 的最后一行 JSON）。
+ * 它是 helper 的 build identity：上游同一 commit、补丁不同 → digest 不同，绝不能混用。
+ */
+function readBridgeDigest(root) {
+  const result = spawnSync(process.execPath, [join(HERE, 'patch-cua-ui-locate-bridge.mjs'), root, '--digest'], { encoding: 'utf8' })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) throw new Error('patch: ui-locate 桥接 --digest 失败（退出码 ' + String(result.status) + '）：' + String(result.stderr).trim())
+  const lines = String(result.stdout ?? '').trim().split(/\r?\n/u).filter((line) => line.trim() !== '')
+  // 摘要是一行 JSON，但不一定排在最后（桥接脚本的补丁日志可能跟在后面）：按内容找。
+  const matches = lines.filter((line) => line.includes('"kind"') && line.includes('cua-helper-native-source'))
+  if (matches.length !== 1) throw new Error('patch: ui-locate 桥接 --digest 应输出且只输出一行原生源码摘要，实际 ' + matches.length + ' 行')
+  let parsed
+  try { parsed = JSON.parse(matches[0]) } catch { throw new Error('patch: ui-locate 桥接 --digest 的摘要行不是 JSON：' + matches[0]) }
+  return normalizeNativeSource(parsed, TAG)
+}
 
 /**
  * 用打包产物自己的 Electron（ELECTRON_RUN_AS_NODE）对空 DSH_HOME 跑一次 plugin-refresh check：
@@ -139,7 +157,8 @@ function main() {
   }
 
   writePackageEnvironment()
-  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / guest devtools / pnpm notifier / acl console)')
+
+  log('1/7', 'applying source patches (update disable / portable bootstrap / toolchain / runtime order / cua chain / computer-use / browser-use / guest devtools / pnpm notifier / acl console / cua defaults / ui-locate bridge)')
   run('patch', process.execPath, [join(HERE, 'patch-desktop-update.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-portable.mjs'), SOURCE])
   run('patch', process.execPath, [join(HERE, 'patch-desktop-toolchain.mjs'), SOURCE])
@@ -157,6 +176,27 @@ function main() {
   // Electron 是 GUI 子系统、永远不持有控制台 → 桌面端每条受限命令都在 DLL 初始化阶段以 0xC0000142
   // 静默死亡。修在源码阶段，由 build:official 编译进产物。
   run('patch', process.execPath, [join(HERE, 'patch-windows-acl-runner-console.mjs'), SOURCE])
+  // 新 Computer Use 链默认启用：改 official-bundles 的 web 模板（desktop 复用）与通用默认。
+  // 必须早于 build:official —— 它编译的是 src/bundles.ts。
+  run('patch', process.execPath, [join(HERE, 'patch-cua-defaults.mjs'), SOURCE])
+  // ui-locate 桥接（B 拥有该脚本与 cua-bridge-files/）。这里只负责在 build:official 之前调用，
+  // 并**要求文件存在**：静默跳过会让产物里少一整套 dispatch/InputQueue 改动，而表面上构建成功。
+  const bridge = join(HERE, 'patch-cua-ui-locate-bridge.mjs')
+  if (!existsSync(bridge)) {
+    throw new Error('patch: 缺少 portable/patch-cua-ui-locate-bridge.mjs —— ui-locate 桥接补丁未随仓，构建必须失败')
+  }
+  run('patch', process.execPath, [bridge, SOURCE])
+
+  // 构建前哨：helper 是在**补丁后**的 native 源码上编译的，所以摘要必须在补丁之后取。
+  // CI 的 cua-helper job 已经用同一份源码打过补丁并据此 publish；这里再算一次，两边不符就失败，
+  // 而不是让用户在点开应用时撞上「协议有新参数、二进制不认识」。
+  const nativeSource = readBridgeDigest(SOURCE)
+  const helper = verifyPayload(sourceHelperDirectory(SOURCE, 'x64'), {
+    commit: TAG,
+    architecture: 'x64',
+    nativeSourceDigest: nativeSource.digest,
+  })
+  log('helper', `native/bin/win-x64 已验证（${Object.keys(helper.files).length} 个文件，buildKey ${helper.buildKey}，native ${nativeSource.digest.slice(0, 19)}…）`)
 
   // 上面刚声明的新依赖得真的落到 node_modules 里才进得了 asar：workflow 那次 install 在源码补丁
   // **之前**、而且是 --frozen-lockfile，新加的项它不认识。跑一次非 frozen 的全量 install —— 这里
@@ -256,6 +296,11 @@ function main() {
   } else {
     log('assemble', 'WARN 打包产物里没有 ' + stageLib + '（原生库映射未打上，验收会拦下）')
   }
+  // helper 必须真的进了 asar.unpacked 的 dsh 树：asarUnpack 少了 native/bin 模式，目录会整棵
+  // 留在 asar 里（Electron 的 fs 垫片能读，Rust/.NET 侧拿真实路径读不到），而 verify 只看文件名
+  // 会放过。这里按上游 nativeExecutablePath 的语义做安装态校验（exe + 全量摘要 + commit）。
+  const installedHelper = verifyInstalled(join(STAGE, 'resources', 'app.asar.unpacked', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-cua-windows'), { commit: TAG, architecture: 'x64' })
+  log('assemble', `helper 已随包：native/bin/win-x64（${Object.keys(installedHelper.files).length} 个文件）`)
   log('data', 'ships no data/ (DSH_HOME is created by the app on first run)')
 
   log('7/7', 'archiving')

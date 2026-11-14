@@ -38,3 +38,25 @@ $browser = @(
 $missing = @($browser | Where-Object { -not (Test-Path ("portable\app\node_modules\" + $_ + "\package.json")) })
 if ($missing.Count -gt 0) { throw ("browser-use 没补进来：" + ($missing -join ', ')) }
 Assert-Declared 'browser-use' $browser
+
+# --- 新 Computer Use 链（默认启用）：bundle + provider + **完整** helper 目录。
+# 只看文件名不够：.NET self-contained 发布目录少了 dll/deps.json/runtimeconfig.json 中的任何一个，
+# 用户机器上 prepareNativeExecutable 的 access() 仍会通过（exe 在），进程却起不来。
+$cua = @(
+  '@deepseek-ai\dsh-cua-bundle',
+  '@deepseek-ai\dsh-cua',
+  '@deepseek-ai\dsh-cua-windows'
+)
+$missing = @($cua | Where-Object { -not (Test-Path ("portable\app\node_modules\" + $_ + "\package.json")) })
+if ($missing.Count -gt 0) { throw ("新 Computer Use 链没补进来：" + ($missing -join ', ')) }
+$helperDir = 'portable\app\node_modules\@deepseek-ai\dsh-cua-windows\native\bin\win-x64'
+foreach ($required in @('dsh-cua-windows.exe', 'dsh-cua-windows.dll', 'dsh-cua-windows.deps.json', 'dsh-cua-windows.runtimeconfig.json', 'cua-helper.json')) {
+  if (-not (Test-Path (Join-Path $helperDir $required))) { throw "helper 目录缺少 $required（.NET 发布目录不完整，安装态会起不来）" }
+}
+$helper = Get-Content (Join-Path $helperDir 'cua-helper.json') -Raw | ConvertFrom-Json
+if ($env:UPSTREAM_SHA -and $helper.commit -ne $env:UPSTREAM_SHA) {
+  throw "helper 来自提交 $($helper.commit)，本次构建是 $env:UPSTREAM_SHA（三产物必须是同一提交）"
+}
+$helperFiles = @($helper.files.PSObject.Properties).Count
+Write-Host ("helper 已随包（$helperFiles 个文件，architecture $($helper.architecture)，buildKey $($helper.buildKey)）")
+Assert-Declared 'cua-chain' @('@deepseek-ai/dsh-cua-bundle', '@deepseek-ai/dsh-cua', '@deepseek-ai/dsh-cua-windows', '@deepseek-ai/dsh-computer-use')

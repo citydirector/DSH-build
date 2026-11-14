@@ -88,9 +88,52 @@ jobs:
           BUILD_SHA: ${{ github.sha }}
         run: bash _build_repo/ci/resolve-target.sh
 
+  # -------- Windows Computer Use helper（.NET 10 self-contained） --------
+  # 单一来源：三份产物都从这里取同一个 payload。上游 cua-windows 在安装态只 access() 已有文件、
+  # 从不编译（packages/experimental/cua-windows/src/native-build.ts 的 prepareNativeExecutable），
+  # 而用户机器没有 .NET SDK —— 所以 helper 必须由 CI 产好、随包发行。
+  # 上传**目录**而不是 zip：下游 job 的 stage 直接读目录树，跨平台（ubuntu 的 npm job）不必解压。
+  cua-helper:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/checkout@v7
+        with:
+          repository: citydirector/DSH-build
+          ref: ${{ github.sha }}
+          path: _build_repo
+      # 本仓脚本声明 engines node>=24（cua-helper.mjs 用 Node 24 的 API），runner 自带的 node
+      # 版本会随镜像漂移，所以这里显式钉 24，与 npm/portable/desktop 三个 job 保持一致。
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      # locked restore → Protocol.Tests → win-x64 self-contained publish → cua-helper.json → 自校验
+      - name: Build the win-x64 helper and verify the payload
+        run: _build_repo/ci/portable/build-cua-helper.ps1 -Root . -Commit ${{ needs.check.outputs.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cua-helper-win-x64
+          path: dist/cua-helper-win-x64/
+          if-no-files-found: error
+          retention-days: 7
+
   # -------- npm tarball 集合（ubuntu） --------
   npm:
-    needs: check
+    needs: [check, cua-helper]
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
@@ -104,7 +147,11 @@ jobs:
           repository: citydirector/DSH-build
           ref: ${{ github.sha }}
           path: _build_repo
-          sparse-checkout: ci
+          # portable 里有 helper 契约脚本与源码补丁；缺了它们 npm tarball 会少 helper、
+          # 少默认启用，而 tarball 本身仍然「打得出来」。
+          sparse-checkout: |
+            ci
+            portable
       # 把上游钉的 packageManager 对齐到我们要跑的 pnpm（理由见顶层 env 注释）
       - name: Align packageManager pin with the pnpm we run
         id: align-pnpm
@@ -118,12 +165,37 @@ jobs:
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version && node --version
+      # helper 在 npm tarball 里也必须完整：cua-windows 的 files 含 native/bin，而安装态 provider
+      # 只 access() 这个目录（不编译）。stage 校验失败就直接失败，不产出「看起来打得出来」的半成品。
+      - uses: actions/download-artifact@v8
+        with:
+          name: cua-helper-win-x64
+          path: cua-helper
+      # 源码补丁必须早于 stage 与 build:official：默认启用改 official-bundles 的 TypeScript 源，
+      # 桥接补丁改 cua/cua-windows 的 TypeScript 与 C#。任一锚点缺失 → 脚本 exit 1 → 本 job 失败。
+      - name: Apply CUA defaults and the ui-locate bridge
+        run: |
+          node _build_repo/portable/patch-cua-defaults.mjs .
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
+      # 打完补丁再取原生源码摘要：helper 是在**补丁后**的源码上编译的，只有 digest 相同才算同一份。
+      - name: Capture the patched native source digest
+        run: |
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          grep '"kind":"cua-helper-native-source"' native-digest.log > native-source.json
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+      - name: Stage the Windows helper into the upstream tree
+        run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       - name: Install dependencies
         run: pnpm --pm-on-fail=ignore install --frozen-lockfile
       - name: Build
         run: pnpm --pm-on-fail=ignore run build:official
       - name: Pack release tarballs
         run: pnpm --pm-on-fail=ignore run release:pack --family dsh --out dist/npm
+      # 不只看 tarball 里有没有文件名：解包后按 win-x64 安装态布局校验整树 SHA + cua-helper.json。
+      - name: Verify the helper inside the published tarball
+        run: |
+          tarball=$(ls dist/npm/*cua-windows*.tgz)
+          node _build_repo/portable/cua-helper.mjs verify-tarball --tarball "$tarball" --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       - name: Archive npm tarballs
         run: zip -r "dsh-npm-tarballs-${{ needs.check.outputs.short_sha }}.zip" dist/npm
       - uses: actions/upload-artifact@v7
@@ -134,7 +206,7 @@ jobs:
 
   # -------- Windows 绿色便携包 --------
   portable:
-    needs: check
+    needs: [check, cua-helper]
     if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
     defaults:
@@ -165,14 +237,40 @@ jobs:
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version; node --version
+      # 全部补丁单测（独立 fixtures，不依赖上游构建产物，因此放在 install 之前）。
+      # **必须在源码补丁之前跑**：桥接补丁的用例要一份**未打补丁**的上游树来自己打 11 条编辑，
+      # 树已被打过时它只会看到「0 edits」并断言失败。UI_LOCATE_UPSTREAM 指本次 checkout 的上游；
+      # 不给它，那组用例会跳过（= 假绿）。
+      - name: Run patch tests
+        env:
+          UI_LOCATE_UPSTREAM: ${{ github.workspace }}
+        run: node --test "_build_repo/tests/*.test.mjs"
+      # deploy 会把 packages/experimental/cua-windows 整个复制进 portable/app，但 native/bin 是
+      # 构建产物、不在仓库里 —— 所以必须在 install/deploy 之前就把它摆好，否则 deploy 出来的
+      # 包缺 helper，而安装态 provider 不会替你编译（它只 access() 已有文件）。
+      - uses: actions/download-artifact@v8
+        with:
+          name: cua-helper-win-x64
+          path: cua-helper
+      # 源码补丁必须早于 stage 与 build:official（它编译 official-bundles 的 TS 与 cua 的 TS）。
+      - name: Apply CUA defaults and the ui-locate bridge
+        run: |
+          node _build_repo/portable/patch-cua-defaults.mjs .
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
+      # 打完补丁再取原生源码摘要：helper 是在补丁后的源码上编译的，digest 不符即拒绝。
+      - name: Capture the patched native source digest
+        run: |
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          $hit = @(Get-Content native-digest.log | Where-Object { $_ -match '"kind"\s*:\s*"cua-helper-native-source"' })
+          if ($hit.Count -ne 1) { throw "桥接脚本应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
+          Set-Content -Path native-source.json -Value $hit[0] -Encoding utf8NoBOM
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+      - name: Stage the Windows helper into the upstream tree
+        run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       - name: Install dependencies (hoisted)
         run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.node-linker=hoisted --config.allowUnusedPatches=true
       - name: Build
         run: pnpm --pm-on-fail=ignore run build:official
-
-      # 全部补丁单测（独立 fixtures，不依赖上游构建产物）
-      - name: Run patch tests
-        run: node --test "_build_repo/tests/*.test.mjs"
 
       # 哨兵：列出 workspace 里**精确版本**钉法的 peer（note 级，永远不拦构建）。
       # 钉版变多 = 上游又收紧了；全没了 = 可以回头重新评估 profile 安装这条路。
@@ -223,7 +321,7 @@ jobs:
   # 与 portable 同一上游提交、同一 Release。用上游**自己的**依赖布局（isolated linker）与 Electron 运行时；
   # 兼容性补丁由 portable/patch-desktop-*.mjs 在构建期打进去（顺序见 build-desktop.mjs 头注释）。
   desktop:
-    needs: check
+    needs: [check, cua-helper]
     if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
     defaults:
@@ -252,15 +350,39 @@ jobs:
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version; node --version
-      # 桌面端不部署，所以**不加** node-linker=hoisted：prepare-*/electron-builder 都按上游 workspace 布局写的。
-      - name: Install dependencies (workspace default linker)
-        run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true
-
-      # DSH_DESKTOP_SOURCE 让 ACL 控制台补丁的测试连上游源码那半一起跑（否则静默跳过）
+      # 与 portable 同理：测试在源码补丁**之前**、install 之前跑（夹具自带依赖，零 npm 依赖）。
+      # DSH_DESKTOP_SOURCE 让 ACL 控制台补丁的测试连上游源码那半一起跑（否则静默跳过）；
+      # UI_LOCATE_UPSTREAM 让桥接用例拿到未打补丁的上游树（否则跳过 = 假绿）。
       - name: Run patch tests
         env:
           DSH_DESKTOP_SOURCE: ${{ github.workspace }}
+          UI_LOCATE_UPSTREAM: ${{ github.workspace }}
         run: node --test "_build_repo/tests/*.test.mjs"
+
+      # 桌面端在 install 前把 helper 摆进上游树：build-desktop.mjs 会在打包前用 cua-helper.mjs
+      # 校验整树摘要（缺件/架构/提交不符都直接失败），asarUnpack 的 native/bin/** 才有东西可解。
+      - uses: actions/download-artifact@v8
+        with:
+          name: cua-helper-win-x64
+          path: cua-helper
+      # 桌面端的源码补丁（默认启用 + 桥接）同样必须早于 install/build:official；
+      # build-desktop.mjs 里还会再跑一遍（幂等），并在补丁之后自取 digest 校验 helper。
+      - name: Apply CUA defaults and the ui-locate bridge
+        run: |
+          node _build_repo/portable/patch-cua-defaults.mjs .
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
+      - name: Capture the patched native source digest
+        run: |
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          $hit = @(Get-Content native-digest.log | Where-Object { $_ -match '"kind"\s*:\s*"cua-helper-native-source"' })
+          if ($hit.Count -ne 1) { throw "桥接脚本应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
+          Set-Content -Path native-source.json -Value $hit[0] -Encoding utf8NoBOM
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+      - name: Stage the Windows helper into the upstream tree
+        run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
+      # 桌面端不部署，所以**不加** node-linker=hoisted：prepare-*/electron-builder 都按上游 workspace 布局写的。
+      - name: Install dependencies (workspace default linker)
+        run: pnpm --pm-on-fail=ignore install --frozen-lockfile --config.allowUnusedPatches=true
 
       # 清单驱动的 update.exe（与便携版同一份源码：靠包内 update.json 认自己的资产前缀与镜像范围）
       - name: Compile updater
@@ -287,7 +409,11 @@ jobs:
   # -------- 合并发布 --------
   release:
     needs: [check, npm, portable, desktop]
-    if: needs.check.outputs.skip != 'true'
+    # 只在发布分支上发布。on.push 只对 main 生效，但 workflow_dispatch 可以指向任意
+    # ref（我们正是用 feat 分支 dispatch 跑真实构建验收）—— 那种运行 skip 通常是 false，
+    # 若不按分支收紧，publish.sh 会覆盖 dsh-dev-latest / dsh-master-latest 资产，
+    # dev 通道还会 advance-pin.sh 往分支推 pin。feat/topic 分支只构建与验收，不发布。
+    if: needs.check.outputs.skip != 'true' && (github.ref_name == 'main' || github.ref_name == 'dev')
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
