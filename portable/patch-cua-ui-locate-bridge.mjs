@@ -277,6 +277,29 @@ const EDITS = [
     from: 'FOREGROUND_REQUIRED means explain the need, then explicitly activate the target and observe again; activation is never automatic. Read fresh state after actions, and treat WINDOW_CHANGED, STALE_SNAPSHOT, and SCREENSHOT_REQUIRED as requiring the stated fresh observation or capture before any retry.',
     to: "FOREGROUND_REQUIRED means explain the need, then explicitly activate the target and observe again; activation is never automatic. Read fresh state after actions, and treat WINDOW_CHANGED, STALE_SNAPSHOT, and SCREENSHOT_REQUIRED as requiring the stated fresh observation or capture before any retry. Delivery defaults to 'foreground'. 'background' is only meaningful when getCapabilities() lists 'background' in deliveryModes, and even then it covers only the standard Win32 control classes named in the capability guidance. A target outside that set returns BACKGROUND_UNAVAILABLE, and background delivery never falls back to the foreground path.",
   },
+  {
+    name: 'cua: CuaClickOptions 带上 deliveryMode',
+    file: `${CUA}/types.ts`,
+    from: "export type CuaClickOptions = Pick<CuaParameters<'click'>, 'mouseButton' | 'clickCount' | 'modifiers' | 'holdMs'> & CuaCoordinateOptions",
+    to: "export type CuaClickOptions = Pick<CuaParameters<'click'>, 'mouseButton' | 'clickCount' | 'modifiers' | 'holdMs' | 'deliveryMode'> & CuaCoordinateOptions",
+  },
+  {
+    name: 'cua: 窗口 click 透传 deliveryMode（元素分支）',
+    file: `${CUA}/api.ts`,
+    from: '        const relative = options?.relative === undefined ? {} : { relative: options.relative }\n'
+      + "        if (typeof targetPoint === 'string') {\n"
+      + '          return base.action(\'click\', { ...base.elementParams(), ...modifiers, ...hold, ...relative, elementId: targetPoint,',
+    to: '        const relative = options?.relative === undefined ? {} : { relative: options.relative }\n'
+      + '        const delivery = options?.deliveryMode === undefined ? {} : { deliveryMode: options.deliveryMode }\n'
+      + "        if (typeof targetPoint === 'string') {\n"
+      + '          return base.action(\'click\', { ...base.elementParams(), ...modifiers, ...hold, ...relative, ...delivery, elementId: targetPoint,',
+  },
+  {
+    name: 'cua: 窗口 click 透传 deliveryMode（坐标分支）',
+    file: `${CUA}/api.ts`,
+    from: '        return base.action(\'click\', { ...coordinateParams(appHandle, windowId), x, y, mouseButton, clickCount, ...modifiers, ...hold, ...relative })',
+    to: '        return base.action(\'click\', { ...coordinateParams(appHandle, windowId), x, y, mouseButton, clickCount, ...modifiers, ...hold, ...relative, ...delivery })',
+  },
 ]
 
 /** 只读校验：逐条比对锚点与幂等状态，不写任何文件。 */

@@ -33,6 +33,7 @@ const TARGETS = [
   'packages/experimental/cua/src/protocol.ts',
   'packages/experimental/cua/src/types.ts',
   'packages/experimental/cua/src/guidance.ts',
+  'packages/experimental/cua/src/api.ts',
   'packages/experimental/cua-windows/src/index.ts',
   'packages/experimental/cua-windows/src/guidance.ts',
   'packages/experimental/cua-windows/native/entry/Win32.cs',
@@ -68,13 +69,14 @@ test('patch：在真实固定上游上把三份注入文件与十一条编辑全
   assert.deepEqual(parts, [
     'packages/experimental/cua/src/index.ts: 4 edits',
     'packages/experimental/cua/src/protocol.ts: 1 edits',
-    'packages/experimental/cua/src/types.ts: 1 edits',
+    'packages/experimental/cua/src/types.ts: 2 edits',
     'packages/experimental/cua-windows/src/index.ts: 1 edits',
     'packages/experimental/cua-windows/src/guidance.ts: 1 edits',
     'packages/experimental/cua-windows/native/entry/Win32.cs: 1 edits',
     'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs: 2 edits',
     'packages/experimental/cua-windows/native/entry/Input.cs: 2 edits',
     'packages/experimental/cua/src/guidance.ts: 2 edits',
+    'packages/experimental/cua/src/api.ts: 2 edits',
   ])
   for (const name of ['cua-dispatch.ts', 'cua-dispatch-guard.ts', 'system-input-queue.ts']) {
     assert.ok(existsSync(join(root, 'packages/experimental/cua/src', name)), `${name} 必须被注入`)
@@ -131,6 +133,42 @@ test('patch：guidance 把 click 的 deliveryMode 与后台拒绝语义写进模
   // 模板串没有被破坏：整行仍在同一个 COMMON_GUIDANCE 里，且没有引入反引号以外的插值。
   assert.match(guidance, /export const COMMON_GUIDANCE = `Use cua to observe/)
   assert.doesNotMatch(guidance, /\$\{DELIVERY_GUIDANCE\}/, '宿主 guidance 不引用平台常量，说明文字必须是字面量')
+})
+
+/**
+ * 程序绑定（`cua_run_code` 走的这条）必须把 deliveryMode 原样带进 native 参数。
+ * 只改工具层 schema 不够：`api.js` 的 click 构造会丢掉未透传的字段，真机就是这样退回前台的。
+ */
+function assertApiClickDelivery(text) {
+  assert.match(text, /const delivery = options\?\.deliveryMode === undefined \? \{\} : \{ deliveryMode: options\.deliveryMode \}/,
+    'click 必须先把 deliveryMode 收成一个可选片段')
+  assert.match(text, /\.\.\.relative, \.\.\.delivery, elementId: targetPoint/,
+    'element 分支也要 spread delivery')
+  assert.match(text, /x, y, mouseButton, clickCount, \.\.\.modifiers, \.\.\.hold, \.\.\.relative, \.\.\.delivery \}\)/,
+    'coordinate 分支也要 spread delivery')
+}
+
+/** 调用点能写 deliveryMode 的前提：`CuaClickOptions` 从 click 参数里挑出这个键。 */
+function assertClickOptionsType(text) {
+  assert.match(text, /Pick<CuaParameters<'click'>, 'mouseButton' \| 'clickCount' \| 'modifiers' \| 'holdMs' \| 'deliveryMode'>/,
+    'CuaClickOptions 必须接受 deliveryMode，否则调用点类型不通')
+}
+
+test('patch：窗口 click 把 deliveryMode 透传到 native（两个分支都 spread）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  assertApiClickDelivery(read(root, 'packages/experimental/cua/src/api.ts'))
+  assertClickOptionsType(read(root, 'packages/experimental/cua/src/types.ts'))
+  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/api.ts'), /deliveryMode: undefined/,
+    '不能把 undefined 显式塞进参数')
+})
+
+// 负控制：同一组断言打在**未打补丁**的源上必须失败——否则这条测试是装饰品。
+test('patch：未打补丁的 api.ts / types.ts 过不了 deliveryMode 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
+  const rawApi = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
+  const rawTypes = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/types.ts'), 'utf8')
+  assert.throws(() => assertApiClickDelivery(rawApi), /click 必须先把 deliveryMode 收成一个可选片段/)
+  assert.throws(() => assertClickOptionsType(rawTypes), /CuaClickOptions 必须接受 deliveryMode/)
 })
 
 test('patch：第二次执行是幂等的（0 edits，文件内容不变）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
