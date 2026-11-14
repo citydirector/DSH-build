@@ -6,6 +6,13 @@ function Invoke-Native([string]$what, [scriptblock]$cmd) {
   if ($LASTEXITCODE -ne 0) { throw "$what 失败（退出码 $LASTEXITCODE）" }
 }
 
+# 0. helper 必须已由 cua-helper job 产好并 stage 到上游树（三产物共用同一提交）。先校验再 deploy：
+#    缺件/摘要不符/提交不符在这里失败，比等到 assert-shipped 或用户点开应用更早、更清楚。
+$helperCommit = $env:UPSTREAM_SHA
+$helperArgs = @('_build_repo\portable\cua-helper.mjs', 'verify', '--root', '.')
+if ($helperCommit) { $helperArgs += @('--commit', $helperCommit) }
+Invoke-Native 'cua-helper verify' { node @helperArgs }
+
 # 1. deploy 到 portable/app：把 @deepseek-ai/dsh 的包文件(lib/bin.js)放到 app 根，依赖(含 workspace 包)
 #    装进 app/node_modules。不加 --prod（dsh 运行时插件在 devDependencies，靠 cordis 动态加载）；
 #    不加 auto-install-peers=false。pnpm deploy 要求目标目录为空（ERR_PNPM_DEPLOY_DIR_NOT_EMPTY），
@@ -36,6 +43,15 @@ Invoke-Native 'build-migrator' { node _build_repo\portable\build-migrator.mjs . 
 #    patch-peers.mjs 遍历 workspace 全部 @deepseek-ai 包，把缺失的补齐（复制 lib/ + package.json）。
 Invoke-Native 'patch-peers' { node _build_repo\portable\patch-peers.mjs . portable\app\node_modules\@deepseek-ai }
 
+# 3b. cua-windows 的 helper：deploy 按包的 files 会带上 native/bin，但 hoisted 布局、patch-peers
+#     以及将来上游改动 files 都可能让它只剩一部分（.NET 发布目录缺一个 dll 就起不来）。这里显式
+#     把整棵 helper 装进安装态包：来源必须通过摘要校验，目标按安装态路径解析并复查（幂等）。
+$helperSource = Join-Path (Get-Location) 'packages\experimental\cua-windows\native\bin\win-x64'
+$helperPackage = 'portable\app\node_modules\@deepseek-ai\dsh-cua-windows'
+$installArgs = @('_build_repo\portable\cua-helper.mjs', 'install', '--from', $helperSource, '--package', $helperPackage)
+if ($helperCommit) { $installArgs += @('--commit', $helperCommit) }
+Invoke-Native 'cua-helper install' { node @installArgs }
+
 # 4. schemastery 依赖 @standard-schema/spec（registry 包，非 workspace），从 install 结果复制。
 if (Test-Path "node_modules\@standard-schema\spec") {
   New-Item -ItemType Directory -Force "portable\app\node_modules\@standard-schema" | Out-Null
@@ -60,13 +76,15 @@ foreach ($t in $buildTools) {
 #    HMR 插件运行时 import 它导致闪退）。patch-dep.mjs 从 root node_modules 递归补齐缺失依赖链，
 #    并把种子**声明进目标清单**：dsh 判断"哪些包能被 profile 的插件行解析"看的是安装清单的
 #    dependencies ∪ peerDependencies，只拷文件不声明 = 行被判未安装、整套插件静默消失。
-#    computer-use（注册表 + 原生提供方）与 browser-use（注册表 / 运行时 / chrome-devtools-mcp 提供方）
+#    computer-use（新链 bundle + cua + cua-windows；旧 provider 保留声明只为自定义 profile）
+#    与 browser-use（注册表 / 运行时 / chrome-devtools-mcp 提供方）
 #    的 workspace 包由 patch-peers 拷进来，列在这里是为了让清单里出现它们；chrome-devtools-mcp 是
 #    提供方自己的 registry 依赖，得靠 patch-dep 从 root node_modules 带过来。
 #    注意：step 5 删掉了 @babel，这里再把 @babel/code-frame 补回来（顺序与原 workflow 一致）。
 Invoke-Native 'patch-dep' {
   node _build_repo\portable\patch-dep.mjs node_modules portable\app\node_modules `
     @babel/code-frame @deepseek-ai/schemastery @trycua/cua-driver @deepseek-ai/dsh-computer-use `
+    @deepseek-ai/dsh-cua-bundle @deepseek-ai/dsh-cua @deepseek-ai/dsh-cua-windows `
     @deepseek-ai/dsh-experimental-computer-use-cua-driver-native chrome-devtools-mcp `
     @deepseek-ai/dsh-browser-use @deepseek-ai/dsh-experimental-browser-use-runtime `
     @deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp
@@ -88,3 +106,9 @@ Invoke-Native 'vendor pnpm' {
   node -e "const fs=require('node:fs');fs.rmSync('portable/app/vendor/pnpm',{recursive:true,force:true});fs.cpSync(fs.realpathSync('node_modules/pnpm'),'portable/app/vendor/pnpm',{recursive:true,dereference:true})"
 }
 if (-not (Test-Path 'portable\app\vendor\pnpm\bin\pnpm.mjs')) { throw '随包 pnpm 缺少 bin\pnpm.mjs' }
+
+# 8. 安装态总校验：按上游 nativeExecutablePath 的语义解析（app.asar→app.asar.unpacked）并核对
+#    整棵 helper 的摘要。前面任何一步把它搬走/改坏，都在这里失败。
+$verifyArgs = @('_build_repo\portable\cua-helper.mjs', 'verify-install', '--package', $helperPackage)
+if ($helperCommit) { $verifyArgs += @('--commit', $helperCommit) }
+Invoke-Native 'cua-helper verify-install' { node @verifyArgs }

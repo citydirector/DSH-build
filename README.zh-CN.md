@@ -45,11 +45,13 @@
 
 | 改动 | 效果 | 包 | 脚本 |
 |---|---|---|---|
-| computer-use | 注册表 + Cua Driver 原生提供方随包，原生库解包出 asar 并修正路径映射 | 🟢🔵 | `patch-desktop-computer-use.mjs`（源码） · `patch-dep.mjs` |
+| computer-use | 新 `dsh-cua-bundle` 链（注册表 + `dsh-cua` + 平台提供方）随包，且**新 profile 默认启用**；.NET 10 helper 在 CI 里发布、以完整 `native/bin/win-x64` 目录随包，用户机器不需要 SDK、也不会联网编译；应用授权仍在运行时逐次询问，绝不预授 | 🟢🔵 | `patch-cua-defaults.mjs`（源码） · `patch-desktop-computer-use.mjs`（源码） · `cua-helper.mjs` · `patch-dep.mjs` |
 | browser-use | 注册表 + 运行时 + chrome-devtools-mcp 提供方随包 | 🟢🔵 | `patch-desktop-browser-use.mjs`（源码） · `patch-dep.mjs` |
 | 内嵌浏览器页的 DevTools | 打包版的 webview guest 也能用 F12 / Ctrl+Shift+I 打开自己的 DevTools（`DSH_DESKTOP_GUEST_DEVTOOLS=0` 可关） | 🔵 | `patch-desktop-guest-devtools.mjs`（源码） |
 
 > 为什么要随包，而不是装进 profile：上游插件的 peer 是**精确版本**，装在 profile 里的副本每次 harness 升版都会被兼容门禁判为不兼容。`check-peer-pins.mjs` 一直盯着这条约束。
+
+**Computer Use 细节。** 默认走 `@deepseek-ai/dsh-cua-bundle` 链：它注册提供方注册表，并在 Windows 上挂 `dsh-cua-windows` 原生提供方（`native/bin/win-x64/dsh-cua-windows.exe`，自包含 .NET 10 payload）。旧的 `computer-use-cua-driver-*` 包仍留在磁盘上，好让已有的自定义 profile 不至于缺包，但默认 profile 不再挂它们——一个 profile 只带一条链。Windows 上原生提供方对 UIA 动作最强；系统级输入（往真实应用里点/打字）需要目标窗口在前台，所以插件按应用逐个申请授权，而不是声称能完全后台控制。已有 profile 只在行形状**有据可查**时才迁移：旧 native 行（`- id: computer-use-cua-native` 加旧 native 包名——正是发行版 desktop profile 写在 `- insert:` 下的形状）与旧的 `computer-use-cua-driver-mcp` 行（id 与包名精确出现在上游自己的会话快照里）。嵌在 `- insert:` 下的插件行不论缩进都能识别；同一段里配对的 `- id: computer-use` 注册表行会随之删除（bundle 自带 `cua-provider-registry`，两份实例会冲突）。显式 `disabled: true`、自定义 `config:` 块、带多余键的行、以及块内夹着用户注释的行，都原样保留并给出告警；已经挂上新链的 profile 一律不动。回滚：把 `@deepseek-ai/dsh-cua-bundle` 从 profile 的 `dsh.profile.bundles` 里去掉（或把旧行加回来）即可，helper payload 始终只在 `native/bin/win-x64` 里。
 
 ### 4. Bug 修复
 
@@ -66,6 +68,7 @@
 | 改动 | 原因 | 脚本 |
 |---|---|---|
 | 补齐 deploy 漏掉的依赖 | `pnpm deploy` 会漏掉 workspace 包之间的 peer 和 registry 依赖，还会把包装成符号链接（打 zip 时会丢）；补齐后**声明进清单**，否则插件行会被判为未安装 | `patch-peers.mjs` · `patch-dep.mjs` |
+| Windows CUA helper 是构建产物 | 安装态只 `access()` 已有 `native/bin/win-<arch>/dsh-cua-windows.exe` 且**从不编译**，所以由专门的 `windows-latest` job 跑 locked restore → Protocol.Tests → self-contained publish；payload 带 `cua-helper.json`（逐文件 SHA256、buildKey、以及**打过补丁的**原生源码摘要），三个消费 job 在 stage 之后再校验一遍 | `cua-helper.mjs` · `ci/portable/build-cua-helper.ps1` |
 | 禁止桌面打包内部重建 | 上游打包会再跑一次 `build:official`，把产物补丁冲掉；关掉内部重建，并重算客户端构建记录 | `patch-desktop-runtime-patch.mjs`（源码） |
 | 现场修复工具 | 已经装好的旧版桌面端，不重装就修掉 `0xC0000142` | `tools/repair-windows-acl-runner-console.mjs` |
 

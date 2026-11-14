@@ -45,11 +45,13 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 
 | Change | Effect | Pkg | Script |
 |---|---|---|---|
-| computer-use | Registry + Cua Driver native provider bundled; native libraries unpacked from asar with a fixed path mapping | 🟢🔵 | `patch-desktop-computer-use.mjs` (source) · `patch-dep.mjs` |
+| computer-use | New `dsh-cua-bundle` chain (registry + `dsh-cua` + platform provider) bundled and **enabled by default for new profiles**; the .NET 10 helper is published in CI and shipped as a complete `native/bin/win-x64` tree, so user machines need no SDK and no network build; app permissions are still requested at runtime, never pre-granted | 🟢🔵 | `patch-cua-defaults.mjs` (source) · `patch-desktop-computer-use.mjs` (source) · `cua-helper.mjs` · `patch-dep.mjs` |
 | browser-use | Registry + runtime + chrome-devtools-mcp provider bundled | 🟢🔵 | `patch-desktop-browser-use.mjs` (source) · `patch-dep.mjs` |
 | DevTools for embedded pages | Packaged webview guests open their own DevTools with F12 / Ctrl+Shift+I (`DSH_DESKTOP_GUEST_DEVTOOLS=0` turns it off) | 🔵 | `patch-desktop-guest-devtools.mjs` (source) |
 
 > Why bundle instead of installing into a profile: upstream plugins pin their peer to an **exact** version, so a profile copy fails the compatibility gate on every harness release. `check-peer-pins.mjs` keeps watching that constraint.
+
+**Computer Use details.** The default is the `@deepseek-ai/dsh-cua-bundle` chain: it registers the provider registry and, on Windows, the `dsh-cua-windows` native provider (`native/bin/win-x64/dsh-cua-windows.exe`, a self-contained .NET 10 payload). The old `computer-use-cua-driver-*` packages stay on disk so existing custom profiles still resolve, but no default profile row mounts them anymore — one profile carries one chain. On Windows the native provider is strongest for UIA actions; system input (clicks/keys into a real app) needs the target window in the foreground, which is why the plugin asks for per-app permission instead of claiming full background control. Existing profiles are only migrated when the row matches a shape we can prove we shipped: the legacy native row (`- id: computer-use-cua-native` plus the old native package name — exactly what the shipped desktop profile wrote under `- insert:`) and the legacy `computer-use-cua-driver-mcp` row, whose id and package name appear in upstream's own session snapshot. Plugin rows nested under `- insert:` are recognized at any indent, and the paired `- id: computer-use` registry row in the same block is removed with them (the bundle brings its own `cua-provider-registry`; two instances would collide). Explicit `disabled: true`, custom `config:` blocks, rows with extra keys, and rows carrying user comments are all left untouched with a warning, and a profile that already has the new chain is never modified. Rollback: remove `@deepseek-ai/dsh-cua-bundle` from the profile's `dsh.profile.bundles` (or re-add the legacy row) — the helper payload never leaves `native/bin/win-x64`.
 
 ### 4. Bug fixes
 
@@ -66,6 +68,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 | Change | Why | Script |
 |---|---|---|
 | Fill what deploy drops | `pnpm deploy` drops peer and registry deps between workspace packages and leaves symlinks that zipping loses; they are copied in **and declared** in the manifest, or plugin rows count as not installed | `patch-peers.mjs` · `patch-dep.mjs` |
+| Windows CUA helper is a build artifact | Installation only `access()`es `native/bin/win-<arch>/dsh-cua-windows.exe` and never compiles, so a dedicated `windows-latest` job runs locked restore → Protocol.Tests → self-contained publish; the payload carries `cua-helper.json` (per-file SHA256, build key, and the **patched** native source digest), and every consumer job re-checks it after staging | `cua-helper.mjs` · `ci/portable/build-cua-helper.ps1` |
 | No internal rebuild during desktop packaging | Upstream packaging reruns `build:official` and would wipe built patches; it is switched off and the client build record recomputed | `patch-desktop-runtime-patch.mjs` (source) |
 | Field repair tool | Fixes `0xC0000142` on an already-installed older desktop without reinstalling | `tools/repair-windows-acl-runner-console.mjs` |
 

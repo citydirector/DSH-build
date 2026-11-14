@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 // 平台原生包名带工具链后缀（-msvc / -gnu），共用补丁脚本里的词表匹配，免得两处各写一套
 import { matchesPlatformName } from './patch-desktop-computer-use.mjs'
+import { verifyInstalled } from './cua-helper.mjs'
 // browser-use 那族要断言的包名同样从补丁脚本取（换提供方时只改补丁脚本的 PROVIDER 一处）
 import { RUNTIME_PACKAGES as BROWSER_USE_PACKAGES } from './patch-desktop-browser-use.mjs'
 // asar 格式与重打包工具共用同一份实现（头部 pickle / 数据区起点 / 块间无对齐填充）
@@ -143,6 +144,9 @@ function main() {
     const runtimePaths = asarPaths.filter((path) => path.startsWith('dsh/node_modules/'))
     for (const suffix of [
       '@deepseek-ai/dsh-computer-use/package.json',
+      '@deepseek-ai/dsh-cua-bundle/package.json',
+      '@deepseek-ai/dsh-cua/package.json',
+      '@deepseek-ai/dsh-cua-windows/package.json',
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/package.json',
       '@trycua/cua-driver/package.json',
     ]) {
@@ -198,6 +202,29 @@ function main() {
     const ubjsText = existsSync(ubjsLib) ? readFileSync(ubjsLib, 'utf8') : ''
     check(ubjsText.includes('dsh-build asar fix'), 'computer-use: @ubjs resolveLibPath 带 asar→unpacked 映射',
       ubjsText === '' ? 'app.asar.unpacked 里没有 resolve-lib.js（@ubjs 没整树解出来？）' : '没打上补丁 → 原生库会以 os error 126 失败')
+
+    // 新链的 bundle 注册文件必须随包：dsh-cua-bundle 的 dsh.bundle 指向 cordis.patch.yml，
+    // 少了它 bundle 会被当成「空插件」静默不注册任何行。
+    for (const rel of ['dsh/node_modules/@deepseek-ai/dsh-cua-bundle/cordis.patch.yml']) {
+      check(asarPaths.includes(rel) || existsSync(join(unpackedRoot, rel)), 'computer-use: ' + rel + ' 随包（bundle 注册链）')
+    }
+
+    // 新链的核心不是 .node，而是 .NET helper 的**整棵**发布目录：上游 nativeExecutablePath 只在
+    // 安装态 access() 它，缺 dll/deps.json/runtimeconfig.json 时 exe 仍在、进程却起不来。这里按
+    // 上游同一套路径语义（app.asar→app.asar.unpacked）校验全量摘要与提交，而不是 grep 文件名。
+    const cuaWindowsPackage = join(unpackedRoot, 'dsh/node_modules/@deepseek-ai/dsh-cua-windows')
+    try {
+      const helper = verifyInstalled(cuaWindowsPackage)
+      const producedFrom = readFileSync(join(stage, 'VERSION'), 'utf8').trim()
+      check(helper.commit === producedFrom, 'computer-use: helper 来自同一上游提交',
+        `helper ${helper.commit} / 产物 VERSION ${producedFrom}`)
+      check(helper.architecture === 'x64', 'computer-use: helper 架构为 win-x64', helper.architecture)
+      check(Object.keys(helper.files).length > 0,
+        `computer-use: CUA helper 安装态完整（${Object.keys(helper.files).length} 个文件，native/bin/win-${helper.architecture}）`)
+    } catch (error) {
+      problems.push(`FAIL computer-use helper — ${error instanceof Error ? error.message : String(error)}`)
+      check(false, 'computer-use: CUA helper 安装态完整')
+    }
   } catch (error) {
     problems.push(`FAIL computer-use surface — ${error instanceof Error ? error.message : String(error)}`)
   }

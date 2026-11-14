@@ -1,16 +1,22 @@
 // patch-desktop-computer-use.mjs <upstream-repo-root>
 //
-// 让官方 computer-use 在桌面端可用。做三件事，幂等：
+// 让 Computer Use 在桌面端可用。做三件事，幂等：
 //
-//   1. 声明依赖：把注册表（@deepseek-ai/dsh-computer-use）、原生提供方
-//      （@deepseek-ai/dsh-experimental-computer-use-cua-driver-native）以及 SDK / ubjs 的平台原生包
+//   1. 声明依赖：把注册表（@deepseek-ai/dsh-computer-use）、新链 bundle 与 provider
+//      （@deepseek-ai/dsh-cua-bundle / dsh-cua / dsh-cua-windows）、以及旧的原生提供方
+//      （@deepseek-ai/dsh-experimental-computer-use-cua-driver-native）和 SDK / ubjs 的平台原生包
 //      写进三份清单 —— apps/desktop-host（产出运行时树 dsh/）、apps/desktop（asar 根）、
 //      @deepseek-ai/dsh 本体（加载器按它的 dependencies ∪ peerDependencies 决定哪些包能被
 //      profile 的插件行解析，缺一不可）。版本取自构建树里已安装的清单，上游升级自动跟随。
-//   2. 解包：给 electron-builder 的 asarUnpack 补上 @trycua/** 与 @ubjs/**。
+//      旧提供方保留声明只为「用户自定义 profile 仍引用它时不会突然缺包」；默认运行链已改挂
+//      dsh-cua-bundle（见 patch-cua-defaults.mjs），不再指向旧 provider。
+//   2. 解包：给 electron-builder 的 asarUnpack 补上 @trycua/**、@ubjs/** 与 native/bin/**。
+//      native/bin 必须整树解出：cua-windows 的 helper 是 .NET 发布目录（exe + dll + deps.json +
+//      runtimeconfig.json），只有 exe 解出来等于没解；上游 nativeExecutablePath 也明确把
+//      app.asar 映射到 app.asar.unpacked。
 //   3. 原生库路径映射：改 @ubjs/node 的 resolveLibPath，见 patchUbjsLibPath 的说明。
 //
-// 两处上游结构若变动会直接抛错（锚点缺失），宁可构建失败也不静默出一个装不上原生运行时的包。
+// 锚点缺失会直接抛错，宁可构建失败也不静默出一个装不上原生运行时的包。
 // 用法: node patch-desktop-computer-use.mjs <repo-root>
 import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 
@@ -28,14 +34,22 @@ const BUILDER_CONFIG = 'apps/desktop/scripts/electron-builder-config.mjs'
 /** asarUnpack 数组的首行 —— 插入锚点。 */
 const UNPACK_ANCHOR = "  const unpack = ['**/*.{node,dylib,dll,so,exe}', '**/*.so.*', '**/spawn-helper', '**/@vscode/ripgrep-*/bin/rg',"
 /** 要补进去的解包模式：@ubjs 必须解出来（打包后要在那份真实文件上补原生库路径映射）；
- *  @trycua 一并解出，让 SDK 的 JS 与清单也落在真实路径上。原生的 .dll/.node 由上游按文件类型解包。 */
-const UNPACK_PATTERNS = "    '**/@trycua/**', '**/@ubjs/**',"
+ *  @trycua 一并解出，让 SDK 的 JS 与清单也落在真实路径上。原生的 .dll/.node 由上游按文件类型解包。
+ *  native/bin 是新链 helper 的完整 .NET 发布目录：上游 nativeExecutablePath 会读
+ *  app.asar.unpacked/…/native/bin/win-<arch>/dsh-cua-windows.exe，只解 exe 不够。 */
+const UNPACK_PATTERNS = "    '**/@trycua/**', '**/@ubjs/**', '**/native/bin/**',"
+/** 判定「已打过」用的标记（两个模式都要在）。 */
+const UNPACK_MARKS = ["'**/@ubjs/**'", "'**/native/bin/**'"]
 /** 构建平台后缀（win32-x64 / darwin-arm64 …）。 */
 const PLATFORM_SUFFIX = `${process.platform}-${process.arch}`
 
-/** 必须出现在产物里的两个插件包：注册表在前（提供方 inject 它提供的服务）。 */
+/** 必须出现在产物里的插件包：注册表在前（提供方 inject 它提供的服务）。
+ *  新链三项是默认运行链；旧 provider 保留声明，避免自定义 profile 引用它时缺包。 */
 export const RUNTIME_PACKAGES = [
   '@deepseek-ai/dsh-computer-use',
+  '@deepseek-ai/dsh-cua-bundle',
+  '@deepseek-ai/dsh-cua',
+  '@deepseek-ai/dsh-cua-windows',
   '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native',
 ]
 
@@ -291,7 +305,7 @@ export function patchUbjsFile(path) {
 export function patchAsarUnpack(root) {
   const path = join(root, BUILDER_CONFIG)
   const source = readFileSync(path, 'utf8')
-  if (source.includes("'**/@trycua/**'")) return { changed: false, path }
+  if (UNPACK_MARKS.every((mark) => source.includes(mark))) return { changed: false, path }
   if (!source.includes(UNPACK_ANCHOR)) {
     throw new Error(`patch-desktop-computer-use: ${BUILDER_CONFIG} 里找不到 asarUnpack 锚点，上游改了结构？`)
   }
@@ -305,7 +319,7 @@ if (import.meta.main) {
   const { added, unpacked, libPath } = patchDesktopComputerUse(root)
   const parts = Object.entries(added).map(([manifest, names]) =>
     manifest + ': ' + (names.length === 0 ? '（已声明，无改动）' : names.join(', ')))
-  if (unpacked.changed) parts.push('asarUnpack: 已补 @trycua/** @ubjs/** 解包')
+  if (unpacked.changed) parts.push('asarUnpack: 已补 @trycua/** @ubjs/** native/bin/** 解包')
   parts.push('@ubjs asar 映射: ' + (libPath.patched.length > 0 ? '已打 ' + libPath.patched.length + ' 处' : '已在位'))
   console.log('patch-computer-use: ' + parts.join(' | '))
 }

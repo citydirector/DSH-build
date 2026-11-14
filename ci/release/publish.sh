@@ -32,10 +32,24 @@ echo "上游版本号 = $upstream_version"
 
 # 机器可读的尾部：check 的跳过判定（ci/resolve-target.sh）读的就是 `upstream:` 与 `glue:` 两行，别再改格式。
 NOTES="$(printf '%s\n\nupstream: %s\nglue: %s\nversion: %s\nchannel: %s\nbuilt-from: %s' "$NOTES" "$UPSTREAM_SHA" "$GLUE" "$upstream_version" "$CHANNEL" "$GLUE_SHA")"
+# 只发布三份**正式**产物，显式列举而不是 artifacts/*/*.zip：CI 里还有 cua-helper-win-x64/
+# （Windows helper 的目录 artifact）与 smoke-error/，通配符会让将来任何新 artifact 的 zip
+# 静默混进 Release。少一份也直接失败 —— 宁可不发，也不发一个缺桌面端/便携版/tarball 的版本。
+assets=()
+for name in dsh-desktop-win64 dsh-portable-win64 dsh-npm-tarballs; do
+  matches=(artifacts/"$name"/*.zip)
+  if [ ! -e "${matches[0]}" ]; then
+    echo "::error::缺少产物 $name（期望 artifacts/$name/*.zip）"
+    exit 1
+  fi
+  assets+=("${matches[@]}")
+done
+echo "发布资产（${#assets[@]} 个）："
+printf '  %s\n' "${assets[@]}"
 # shellcheck disable=SC2086 # $prerelease 为空时必须消失，不能变成空参数
 gh release create "$RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --title "$TITLE ($(date +%Y%m%d))" \
   --notes "$NOTES" \
   $prerelease \
-  artifacts/*/*.zip
+  "${assets[@]}"
