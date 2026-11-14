@@ -327,3 +327,61 @@ test('queue：释放时跳过已中止的等待者，把槽位交给下一个真
   assert.equal(queue.busy, false)
   assert.equal(queue.pending, 0)
 })
+
+// ── 生成代码与真实 P/Invoke 签名的一致性（CS0023 的防线） ──────────────────
+//
+// 补丁生成的是 C#，本机没有 SDK 编译它。所以这里退一步，做**结构性**校验：
+// 从真实上游 `Win32.cs` 读每个 `internal static extern` 的返回类型，再对生成代码里
+// 每个 `!Win32.X(...)` / `if (Win32.X(...))` 断言 X 真的返回 bool、且带
+// `[return: MarshalAs(UnmanagedType.Bool)]`。
+// CI 首轮就栽在 `!Win32.GetWindowThreadProcessId(...)` 上——它返回 uint（线程 id）。
+
+/** 解析 `Win32.cs`：方法名 → { returns, declaration }。 */
+function win32Signatures(root) {
+  const file = join(root, 'packages/experimental/cua-windows/native/entry/Win32.cs')
+  const text = readFileSync(file, 'utf8')
+  const signatures = new Map()
+  const pattern = /internal static extern\s+([A-Za-z_][\w.<>[\]?]*)\s+([A-Za-z_]\w*)\s*\(/g
+  for (const match of text.matchAll(pattern)) {
+    const start = text.lastIndexOf('\n', match.index) + 1
+    const end = text.indexOf('\n', match.index)
+    signatures.set(match[2], { returns: match[1], declaration: text.slice(start, end < 0 ? text.length : end) })
+  }
+  return signatures
+}
+
+test('生成的原生代码：对 Win32.X 取反/当布尔用时，X 必须真的返回 bool', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const signatures = win32Signatures(root)
+
+  assert.ok(signatures.has('GetWindowThreadProcessId'), '上游 Win32.cs 应当已有这个声明')
+  assert.equal(signatures.get('GetWindowThreadProcessId').returns, 'uint',
+    '它返回线程 id（uint），不是 bool —— 任何 ! 取反都会 CS0023')
+
+  for (const rel of ['packages/experimental/cua-windows/native/entry/Input.cs', 'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs']) {
+    const text = read(root, rel)
+    // 只认无歧义的取反：`!Win32.X(...)`。像 `if (Win32.SendInput(...) != n)` 这种比较
+    // 本身已经是 bool，不属于这一类。
+    for (const match of text.matchAll(/!\s*Win32\.(\w+)\s*\(/g)) {
+      const guarded = match[1]
+      const signature = signatures.get(guarded)
+      assert.ok(signature, `${rel} 用了不存在的 Win32.${guarded}（拼错或没声明）`)
+      assert.equal(signature.returns, 'bool', `${rel} 对 Win32.${guarded} 取反，但它返回 ${signature.returns} → 会 CS0023`)
+      assert.match(signature.declaration, /MarshalAs\(UnmanagedType\.Bool\)/,
+        `Win32.${guarded} 返回 bool 却缺 [return: MarshalAs(UnmanagedType.Bool)]，默认封送会读错返回值`)
+    }
+  }
+})
+
+test('生成的 Input.cs：归属校验只看 out 的 pid，且不再对 GetWindowThreadProcessId 取反', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
+
+  assert.doesNotMatch(input, /!\s*Win32\.GetWindowThreadProcessId/, 'CS0023 的来源：uint 不能取反')
+  assert.match(input, /Win32\.GetWindowThreadProcessId\(hit, out var hitProcess\);/, '必须先调用再单独判 pid')
+  assert.match(input, /if \(hitProcess != \(uint\)window\.ProcessId\)/, '归属校验保留：pid 不同就 BACKGROUND_UNAVAILABLE')
+  // 语义没缩水：这条分支仍然抛 BACKGROUND_UNAVAILABLE，而不是静默继续。
+  assert.match(input, /hitProcess != \(uint\)window\.ProcessId\)\s*\n\s*throw new NativeFailure\("BACKGROUND_UNAVAILABLE"/)
+})
