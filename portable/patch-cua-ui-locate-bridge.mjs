@@ -265,6 +265,18 @@ const EDITS = [
       '    internal static async Task HoldClick(AppState app, WindowState window, double x, double y, string button, int count, string[] modifiers, int holdMs, RequestContext context)',
     ].join('\n'),
   },
+  {
+    name: 'cua: guidance click 签名声明 deliveryMode',
+    file: `${CUA}/guidance.ts`,
+    from: "- click(target: string | [number, number], options?: { mouseButton?: 'left' | 'right' | 'middle', clickCount?: 1 | 2, modifiers?: Modifier[], holdMs?: number, relative?: boolean }) -> ActionResult — click an element id or point, or perform a left-button double-click; holdMs controls the press duration of each press.",
+    to: "- click(target: string | [number, number], options?: { mouseButton?: 'left' | 'right' | 'middle', clickCount?: 1 | 2, modifiers?: Modifier[], holdMs?: number, relative?: boolean, deliveryMode?: 'background' | 'foreground' }) -> ActionResult — click an element id or point, or perform a left-button double-click; holdMs controls the press duration of each press; deliveryMode chooses how a coordinate click reaches the target and defaults to 'foreground'.",
+  },
+  {
+    name: 'cua: guidance 说明段补后台投递三句',
+    file: `${CUA}/guidance.ts`,
+    from: 'FOREGROUND_REQUIRED means explain the need, then explicitly activate the target and observe again; activation is never automatic. Read fresh state after actions, and treat WINDOW_CHANGED, STALE_SNAPSHOT, and SCREENSHOT_REQUIRED as requiring the stated fresh observation or capture before any retry.',
+    to: "FOREGROUND_REQUIRED means explain the need, then explicitly activate the target and observe again; activation is never automatic. Read fresh state after actions, and treat WINDOW_CHANGED, STALE_SNAPSHOT, and SCREENSHOT_REQUIRED as requiring the stated fresh observation or capture before any retry. Delivery defaults to 'foreground'. 'background' is only meaningful when getCapabilities() lists 'background' in deliveryModes, and even then it covers only the standard Win32 control classes named in the capability guidance. A target outside that set returns BACKGROUND_UNAVAILABLE, and background delivery never falls back to the foreground path.",
+  },
 ]
 
 /** 只读校验：逐条比对锚点与幂等状态，不写任何文件。 */

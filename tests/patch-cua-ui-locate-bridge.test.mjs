@@ -32,6 +32,7 @@ const TARGETS = [
   'packages/experimental/cua/src/index.ts',
   'packages/experimental/cua/src/protocol.ts',
   'packages/experimental/cua/src/types.ts',
+  'packages/experimental/cua/src/guidance.ts',
   'packages/experimental/cua-windows/src/index.ts',
   'packages/experimental/cua-windows/src/guidance.ts',
   'packages/experimental/cua-windows/native/entry/Win32.cs',
@@ -39,11 +40,13 @@ const TARGETS = [
   'packages/experimental/cua-windows/native/entry/Input.cs',
 ]
 
-const haveUpstream = existsSync(join(UPSTREAM, TARGETS[0])) && existsSync(join(UPSTREAM, TARGETS[7]))
+const haveUpstream = existsSync(join(UPSTREAM, TARGETS[0])) && existsSync(join(UPSTREAM, TARGETS.at(-1)))
 const missingUpstream = `上游 checkout 不在：${UPSTREAM}（设 UI_LOCATE_UPSTREAM 指向固定上游再跑）`
 
 /** 在仓内的临时目录里做一份镜像，测试结束删掉。 */
 function mirror(t) {
+  // mkdtemp 要求父目录已存在；`_skadi_temp` 会被清理，所以这里自己补上。
+  mkdirSync(join(REPO, '_skadi_temp'), { recursive: true })
   const dir = mkdtempSync(join(REPO, '_skadi_temp', 'patch-test-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   for (const rel of TARGETS) {
@@ -71,6 +74,7 @@ test('patch：在真实固定上游上把三份注入文件与十一条编辑全
     'packages/experimental/cua-windows/native/entry/Win32.cs: 1 edits',
     'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs: 2 edits',
     'packages/experimental/cua-windows/native/entry/Input.cs: 2 edits',
+    'packages/experimental/cua/src/guidance.ts: 2 edits',
   ])
   for (const name of ['cua-dispatch.ts', 'cua-dispatch-guard.ts', 'system-input-queue.ts']) {
     assert.ok(existsSync(join(root, 'packages/experimental/cua/src', name)), `${name} 必须被注入`)
@@ -106,6 +110,27 @@ test('patch：在真实固定上游上把三份注入文件与十一条编辑全
   assert.match(input, /GetWindowThreadProcessId/, '命中窗口必须校验归属进程')
   assert.doesNotMatch(input, /BackgroundRejectedClasses/, '黑名单写法必须已经移除')
   assert.match(input, /using System\.Text;/)
+})
+
+// 模型看到的是 guidance 文本（运行时的 `cua_get_api_reference` 就返回它）：
+// schema 里有 deliveryMode 但文档不写，模型就不会用——真机验收已经踩过一次。
+test('patch：guidance 把 click 的 deliveryMode 与后台拒绝语义写进模型文档', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const guidance = read(root, 'packages/experimental/cua/src/guidance.ts')
+  // 签名：必须作为 click 的 options 出现，而不是另起一行的方法。
+  assert.match(guidance, /- click\(target: string \| \[number, number\], options\?: \{[^}]*deliveryMode\?: 'background' \| 'foreground'[^}]*\}\) -> ActionResult/)
+  // 三句说明：默认前台 / 只在能力声明时有效且仅限列出的 Win32 类 / 拒绝且绝不回退。
+  assert.match(guidance, /Delivery defaults to 'foreground'\./)
+  assert.match(guidance, /'background' is only meaningful when getCapabilities\(\) lists 'background' in deliveryModes/)
+  assert.match(guidance, /returns BACKGROUND_UNAVAILABLE, and background delivery never falls back to the foreground path\./)
+  // 幂等与不重复：每条说明只出现一次。
+  assert.equal(guidance.split("Delivery defaults to 'foreground'.").length - 1, 1)
+  assert.equal(guidance.split('BACKGROUND_UNAVAILABLE').length - 1, 1)
+  assert.equal(guidance.split("deliveryMode?: 'background' | 'foreground'").length - 1, 1)
+  // 模板串没有被破坏：整行仍在同一个 COMMON_GUIDANCE 里，且没有引入反引号以外的插值。
+  assert.match(guidance, /export const COMMON_GUIDANCE = `Use cua to observe/)
+  assert.doesNotMatch(guidance, /\$\{DELIVERY_GUIDANCE\}/, '宿主 guidance 不引用平台常量，说明文字必须是字面量')
 })
 
 test('patch：第二次执行是幂等的（0 edits，文件内容不变）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
