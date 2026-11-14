@@ -136,6 +136,98 @@ test('patch：guidance 把 click 的 deliveryMode 与后台拒绝语义写进模
 })
 
 /**
+ * P0（真机）：background 打一个完全离屏的 #32770，把 native 宿主整个弄死。
+ * 根因不是 PostMessage 本身，而是后台分支入口先调了 UIA 快照（RequireObservation → RequireCurrent →
+ * DesktopWindows.ResolveWindow）：同步 UIA 调用对离屏窗口会阻塞，30 秒请求超时打不断同步调用，
+ * NativeServer 的清理宽限期到点就 Fatal("NATIVE_CLEANUP", …) 主动终止宿主。
+ * 所以后台路径的入口预检必须是纯 User32，且必须排在任何 UIA / PostMessage 之前。
+ */
+function clickBackgroundSegment(input) {
+  const start = input.indexOf('internal static void ClickBackground')
+  const end = input.indexOf('private const uint MonitorDefaultToNearest')
+  assert.ok(start > 0 && end > start, 'ClickBackground 实现与它的常量必须都存在')
+  return input.slice(start, end)
+}
+
+test('patch：后台投递在碰 UIA 之前拒绝离屏/最小化窗口（宿主不能因此退出）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const win32 = read(root, 'packages/experimental/cua-windows/native/entry/Win32.cs')
+  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
+  const segment = clickBackgroundSegment(input)
+
+  // 1. 后台分支不得调用任何 UIA：同步阻塞会把宿主拖到清理超时。
+  assert.doesNotMatch(segment, /RequireObservation|RequireCurrent|Accessibility|ResolveWindow|mta\.Invoke/,
+    'background 路径不得调用 UIA，否则离屏窗口会阻塞到清理宽限期，宿主自杀')
+  // 2. 入口预检必须是纯 User32，并且真的判「看不见」。
+  assert.match(segment, /Win32\.IsIconic\(handle\)/, '最小化的窗口要在入口就拒绝')
+  assert.match(segment, /Win32\.IsWindowVisible\(handle\)/, '不可见窗口要在入口就拒绝')
+  assert.match(segment, /Win32\.GetWindowRect\(handle, out var frame\)/, '几何必须从 User32 取，不走 UIA 观察')
+  assert.match(segment, /Win32\.MonitorFromWindow\(handle, MonitorDefaultToNearest\)/)
+  assert.match(segment, /Win32\.GetMonitorInfo\(monitor, ref info\)/)
+  assert.match(segment, /Intersect\(frame, info\.Work\)/, '窗口矩形必须与显示器工作区求交')
+  assert.match(segment, /outside every monitor visible work area/, '离屏拒绝文案要说明原因')
+  assert.match(segment, /target window is minimized/)
+  // 2b. 命中解析不得用 WindowFromPoint：它会向目标线程发 WM_NCHITTEST，同步等不到取消，
+  // 清理宽限期一到 NativeServer 就 Fatal；改用只做几何判断的 ChildWindowFromPointEx 逐层下探。
+  assert.doesNotMatch(segment, /Win32\.WindowFromPoint\s*\(/, '后台路径不得调用 WindowFromPoint（跨窗口命中测试会阻塞）；注释里提到它不算调用')
+  assert.match(segment, /var root = Win32\.GetAncestor\(handle, 2\);/)
+  assert.match(segment, /Win32\.ChildWindowFromPointEx\(hit, probe, SkipInvisibleAndDisabled\)/)
+  assert.match(segment, /if \(child == 0 \|\| child == hit\) break;/)
+  assert.match(segment, /point = probe;/)
+  assert.match(input, /private const uint SkipInvisibleAndDisabled = 0x0001 \| 0x0002 \| 0x0004;/, '跳过标志要覆盖不可见/禁用/透明')
+  // 3. 顺序：预检 → 命中校验 → 白名单 → PostMessage。任何一步颠倒都可能放行离屏目标。
+  const at = (needle) => {
+    const index = segment.indexOf(needle)
+    assert.ok(index >= 0, `缺少必要片段: ${needle}`)
+    return index
+  }
+  assert.ok(at('Win32.IsIconic(handle)') < at('MonitorFromWindow'), '最小化检查必须在监视器解析之前')
+  assert.ok(at('Intersect(frame, info.Work)') < at('Win32.GetAncestor(handle, 2)'), '离屏检查必须早于根类判定')
+  assert.ok(at('Win32.GetAncestor(handle, 2)') < at('Array.IndexOf(BackgroundRootClasses'), '根类判定必须前置到任何跨窗口查询之前')
+  assert.ok(at('Array.IndexOf(BackgroundRootClasses') < at('ChildWindowFromPointEx'), '根类不在白名单时绝不能进入下探')
+  assert.ok(at('ChildWindowFromPointEx') < at('Post(hit, messages.Down'), '命中与控件白名单校验必须早于投递')
+  assert.ok(at('BackgroundRootClasses, rootName') < at('Post(hit, messages.Down'))
+  assert.ok(at('BackgroundControlClasses, name') < at('Post(hit, messages.Down'))
+  // 4. 投递后的复核同样只用 User32（进程 + 几何），不回到 UIA。
+  const tail = segment.slice(at('Post(hit, messages.Down'))
+  assert.match(tail, /Win32\.IsWindow\(handle\)/)
+  assert.match(tail, /Win32\.GetWindowThreadProcessId\(handle, out var ownerProcess\)/)
+  assert.match(tail, /Win32\.GetWindowRect\(handle, out var after\)/)
+  // 5. 原生声明：监视器工作区所需的 P/Invoke 与结构必须存在且与真实签名一致。
+  assert.match(win32, /internal static extern nint MonitorFromWindow\(nint window, uint flags\)/)
+  assert.match(win32, /internal static extern nint ChildWindowFromPointEx\(nint parent, Point point, uint flags\)/)
+  assert.match(win32, /internal static extern bool GetMonitorInfo\(nint monitor, ref MonitorInfo info\)/)
+  assert.match(win32, /internal struct MonitorInfo\s*\{\s*internal int Size; internal Rect Monitor; internal Rect Work; internal uint Flags;/)
+  assert.match(input, /private const uint MonitorDefaultToNearest = 2;/)
+})
+
+test('patch：预检不误伤在屏标准控件（#32770 对话框 + SysTreeView32 仍走白名单）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
+  const segment = clickBackgroundSegment(input)
+  // 白名单数组声明在方法之外，所以对整份 Input.cs 断言内容。
+  assert.match(input, /"#32770", \/\/ 标准对话框/)
+  assert.match(input, /"Button", "Edit", "Static", "ComboBox", "ComboBoxEx32", "RichEdit20W", "RichEdit50W",/)
+  assert.match(input, /"SysListView32", "SysTreeView32", "SysHeader32", "ToolbarWindow32", "ReBarWindow32",/)
+  // 预检只判可见性，不判类名：类名判定仍在命中点之后，避免把在屏对话框挡掉。
+  assert.ok(segment.indexOf('Win32.IsIconic(handle)') < segment.indexOf('Array.IndexOf(BackgroundRootClasses'))
+})
+
+test('patch：guidance 说明离屏/最小化会被入口拒绝（模型可预期，不靠猜）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const hostGuidance = read(root, 'packages/experimental/cua/src/guidance.ts')
+  const platformGuidance = read(root, 'packages/experimental/cua-windows/src/guidance.ts')
+  const sentence = /A minimized, hidden, or entirely off-screen window is rejected before any message is posted/
+  assert.match(hostGuidance, sentence)
+  assert.match(platformGuidance, sentence)
+  // 仍然只说一次 BACKGROUND_UNAVAILABLE，新句子不重复那个码。
+  assert.equal(hostGuidance.split('BACKGROUND_UNAVAILABLE').length - 1, 1)
+})
+
+/**
  * 程序绑定（`cua_run_code` 走的这条）必须把 deliveryMode 原样带进 native 参数。
  * 只改工具层 schema 不够：`api.js` 的 click 构造会丢掉未透传的字段，真机就是这样退回前台的。
  */
