@@ -172,9 +172,11 @@ test('patch：后台投递在碰 UIA 之前拒绝离屏/最小化窗口（宿主
   // 清理宽限期一到 NativeServer 就 Fatal；改用只做几何判断的 ChildWindowFromPointEx 逐层下探。
   assert.doesNotMatch(segment, /Win32\.WindowFromPoint\s*\(/, '后台路径不得调用 WindowFromPoint（跨窗口命中测试会阻塞）；注释里提到它不算调用')
   assert.match(segment, /var root = Win32\.GetAncestor\(handle, 2\);/)
-  assert.match(segment, /Win32\.ChildWindowFromPointEx\(hit, probe, SkipInvisibleAndDisabled\)/)
+  assert.match(segment, /Win32\.ChildWindowFromPointEx\(hit, local, SkipInvisibleAndDisabled\)/)
   assert.match(segment, /if \(child == 0 \|\| child == hit\) break;/)
-  assert.match(segment, /point = probe;/)
+  assert.match(segment, /for \(var depth = 0; depth < 8; depth\+\+\)/, '下探必须有深度上限，不能在异常拓扑里死循环')
+  assert.doesNotMatch(segment, /ref probe/, 'ScreenToClient 会把入参原地改成客户区坐标，不能跨层复用同一个变量')
+  assert.match(segment, /point = local;/)
   assert.match(input, /private const uint SkipInvisibleAndDisabled = 0x0001 \| 0x0002 \| 0x0004;/, '跳过标志要覆盖不可见/禁用/透明')
   // 3. 顺序：预检 → 命中校验 → 白名单 → PostMessage。任何一步颠倒都可能放行离屏目标。
   const at = (needle) => {
@@ -200,6 +202,77 @@ test('patch：后台投递在碰 UIA 之前拒绝离屏/最小化窗口（宿主
   assert.match(win32, /internal static extern bool GetMonitorInfo\(nint monitor, ref MonitorInfo info\)/)
   assert.match(win32, /internal struct MonitorInfo\s*\{\s*internal int Size; internal Rect Monitor; internal Rect Work; internal uint Flags;/)
   assert.match(input, /private const uint MonitorDefaultToNearest = 2;/)
+})
+
+test(`patch：逐层下探每层都从屏幕坐标重算（两层嵌套几何不会把第一层结果再转一次）`, { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+  const input = read(root, 'packages/experimental/cua-windows/native/entry/Input.cs')
+  const segment = clickBackgroundSegment(input)
+
+  // 6. 结构：ScreenToClient 的入参每层都必须先被重置成屏幕坐标。
+  const loopStart = segment.indexOf('for (var depth = 0; depth < 8; depth++)')
+  assert.ok(loopStart >= 0, '下探循环缺失')
+  const loopEnd = segment.indexOf('}', segment.indexOf('if (child == 0 || child == hit) break;'))
+  const body = segment.slice(loopStart, loopEnd)
+  const reset = body.indexOf('local = screen;')
+  const convert = body.indexOf('Win32.ScreenToClient(hit, ref local)')
+  assert.ok(reset >= 0, '循环体里缺 `local = screen;`：第二层会拿客户区坐标当屏幕坐标')
+  assert.ok(convert >= 0, '循环体里缺 ScreenToClient(hit, ref local)')
+  assert.ok(reset < convert, '`local = screen;` 必须在 ScreenToClient 之前')
+
+  // 7. 数值：两层嵌套几何下的算术结果。ScreenToClient 是原地换算，所以只要跨层复用就会偏移两次。
+  const frames = new Map([
+    ['root', { origin: [100, 100], child: 'panel' }],
+    ['panel', { origin: [120, 120], child: 'button' }],
+    ['button', { origin: [126, 132], child: null }],
+  ])
+  const screenPoint = [130, 150]
+  const toClient = (name, point) => {
+    const { origin } = frames.get(name)
+    return [point[0] - origin[0], point[1] - origin[1]]
+  }
+  const inside = (local) => local[0] >= 0 && local[1] >= 0 && local[0] < 200 && local[1] < 200
+  // 生成代码的做法：每层从同一个屏幕坐标重算。
+  const correct = () => {
+    let hit = 'root'
+    let local = screenPoint
+    for (let depth = 0; depth < 8; depth += 1) {
+      local = screenPoint
+      const candidate = toClient(hit, local)
+      if (!inside(candidate)) break
+      const child = frames.get(hit).child
+      if (child === null) { local = candidate; break }
+      local = candidate
+      hit = child
+    }
+    return { hit, local }
+  }
+  // 旧写法：跨层复用 probe（已被原地改成客户区坐标）。
+  const buggy = () => {
+    let hit = 'root'
+    let probe = screenPoint
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = toClient(hit, probe)
+      probe = candidate
+      if (!inside(candidate)) break
+      const child = frames.get(hit).child
+      if (child === null) break
+      hit = child
+    }
+    return { hit, local: probe }
+  }
+  const good = correct()
+  const bad = buggy()
+  assert.deepEqual(good, { hit: 'button', local: [4, 18] }, '最深一层客户区坐标应是屏幕点减去最内层原点')
+  assert.notDeepEqual(bad.local, good.local, '跨层复用会让第二层起算到窗口外——这正是要防的静默错点')
+  // 生成的代码把 local 拼进 lParam：低位 X、高位 Y。
+  assert.match(segment, /var lparam = \(nint\)\(\(point\.Y << 16\) \| \(point\.X & 0xFFFF\)\);/,'lParam 必须由最终客户区坐标拼出')
+  const lparam = (good.local[1] << 16) | (good.local[0] & 0xffff)
+  const buggyLparam = (bad.local[1] << 16) | (bad.local[0] & 0xffff)
+  assert.notStrictEqual(lparam, buggyLparam)
+  assert.strictEqual((lparam >> 16) & 0xffff, 18)
+  assert.strictEqual(lparam & 0xffff, 4)
 })
 
 test('patch：预检不误伤在屏标准控件（#32770 对话框 + SysTreeView32 仍走白名单）', { skip: haveUpstream ? false : missingUpstream }, (t) => {
