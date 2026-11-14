@@ -63,12 +63,12 @@ const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
 
 // ── 真实上游上打补丁 ────────────────────────────────────────────────────────
 
-test('patch：在真实固定上游上把三份注入文件与十一条编辑全部打进去', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('patch：在真实固定上游上把三份注入文件与十九条编辑全部打进去', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
   const parts = patchCuaUiLocateBridge(root)
   assert.deepEqual(parts, [
     'packages/experimental/cua/src/index.ts: 4 edits',
-    'packages/experimental/cua/src/protocol.ts: 1 edits',
+    'packages/experimental/cua/src/protocol.ts: 2 edits',
     'packages/experimental/cua/src/types.ts: 2 edits',
     'packages/experimental/cua-windows/src/index.ts: 1 edits',
     'packages/experimental/cua-windows/src/guidance.ts: 1 edits',
@@ -460,4 +460,75 @@ test('注入的 TS 源码：`exactOptionalPropertyTypes` 下不把 undefined 显
   // 也不要用显式 undefined 绕过可选属性。
 
   assert.doesNotMatch(queue, /signal:\s*undefined/, '不要用显式 undefined 绕过可选属性')
+})
+/** 本地 zod 探针目录（`_skadi_temp/zodprobe`，含 zod v4）；不存在就跳过行为测试，并说明原因。 */
+const ZOD_PROBE = join(REPO, '_skadi_temp', 'zodprobe')
+const haveZod = existsSync(join(ZOD_PROBE, 'node_modules', 'zod', 'package.json'))
+const missingZod = '本地没有 zod：在 _skadi_temp/zodprobe 里 npm install zod@4 后再跑（CI 无依赖，跳过并说明）'
+
+/** capabilities 的原生骨架：provider 只额外补 deliveryModes，其余字段 native 都会给。 */
+const CAPABILITIES_BASE = {
+  platform: 'windows',
+  permissions: { accessibility: true, screenRecording: true },
+  appLevelAccessibility: false,
+  keyboard: ['window'],
+  sessionLocked: false,
+  methods: ['click', 'screenshot'],
+  coordinateSpace: 'screenshot-pixels',
+  browser: false,
+}
+
+test('patch：deliveryModes 由 provider 声明，经 CapabilitiesResult 保留、未声明就不出现', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+
+  // 程序绑定那条路会拿 CapabilitiesResult 解析结果；schema 里没有这个键，provider 合并进去也会被剥掉。
+  assert.match(read(root, 'packages/experimental/cua/src/protocol.ts'),
+    /deliveryModes: z\.array\(z\.enum\(\['background', 'foreground'\]\)\)\.optional\(\),/,
+    'CapabilitiesResult 必须能承载 deliveryModes')
+  const index = read(root, 'packages/experimental/cua/src/index.ts')
+  assert.match(index, /\.\.\.\(capabilities\.deliveryModes === undefined \? \{\} : \{ deliveryModes: \[\.\.\.capabilities\.deliveryModes\] \}\),/,
+    'provider 声明了才合并进去')
+  assert.doesNotMatch(index, /\?\? \['foreground'\]/,
+    '不能用缺省值把「provider 没声明」伪装成支持 background')
+})
+
+// 负控制：同一组结构断言打在未打补丁的真实上游上必须失败。
+test('patch：未打补丁的 protocol.ts / index.ts 过不了 deliveryModes 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
+  const rawProtocol = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'utf8')
+  const rawIndex = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/index.ts'), 'utf8')
+  assert.doesNotMatch(rawProtocol, /deliveryModes/, '上游 CapabilitiesResult 本来没有这个字段')
+  assert.doesNotMatch(rawIndex, /deliveryModes/, '上游 callNative 的 getCapabilities 合并本来不碰它')
+})
+
+/** 把一份 protocol.ts 拷进 zod 探针目录并 import 回来（目录里已有 zod 与 type:module 的 package.json）。 */
+async function loadCapabilitiesFrom(source, label) {
+  const name = `capabilities-${label}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.ts`
+  const target = join(ZOD_PROBE, name)
+  writeFileSync(target, readFileSync(source))
+  try {
+    const mod = await import(new URL(`./${name}`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)
+    return mod.CapabilitiesResult
+  } finally {
+    rmSync(target, { force: true })
+  }
+}
+
+// 行为测试：真的让 zod 解析一遍，不是只读文本。
+test('behavior：打了补丁的 CapabilitiesResult 保留 provider 声明的 deliveryModes、未声明则不发明', { skip: haveZod ? false : missingZod }, async (t) => {
+  const root = mirror(t)
+  patchCuaUiLocateBridge(root)
+
+  // protocol.ts 只 import node:buffer 与 zod（types 是 import type，类型擦除后不解析），拷进带 zod 的目录就能跑。
+  const patched = await loadCapabilitiesFrom(join(root, 'packages/experimental/cua/src/protocol.ts'), 'patched')
+  const declared = patched.parse({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })
+  assert.deepEqual(declared.deliveryModes, ['foreground', 'background'])
+
+  const undeclared = patched.parse(CAPABILITIES_BASE)
+  assert.equal('deliveryModes' in undeclared, false, '没声明就该没有这个键，而不是 [] 或 undefined')
+
+  // 负控制：同一份 payload 用未打补丁的 schema 解析，声明的能力会被剥掉——这正是真机里模型看不到它的原因。
+  const raw = await loadCapabilitiesFrom(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'raw')
+  const stripped = raw.parse({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })
+  assert.equal('deliveryModes' in stripped, false, '未打补丁的 CapabilitiesResult 会剥掉这个键')
 })
