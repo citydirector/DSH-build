@@ -77,7 +77,8 @@ export class SystemInputQueue {
     }
     if (this.waiting.length >= this.limit) throw new InputQueueFullError()
     return await new Promise<() => void>((resolve, reject) => {
-      const waiter: Waiter = { resolve, reject, signal }
+      // `exactOptionalPropertyTypes`：可选属性不能显式赋 undefined，所以只在有时才带上 signal。
+      const waiter: Waiter = { resolve, reject, ...(signal ? { signal } : {}) }
       if (signal) {
         waiter.onAbort = () => {
           const index = this.waiting.indexOf(waiter)
