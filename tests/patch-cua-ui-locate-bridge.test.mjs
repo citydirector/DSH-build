@@ -385,3 +385,16 @@ test('生成的 Input.cs：归属校验只看 out 的 pid，且不再对 GetWind
   // 语义没缩水：这条分支仍然抛 BACKGROUND_UNAVAILABLE，而不是静默继续。
   assert.match(input, /hitProcess != \(uint\)window\.ProcessId\)\s*\n\s*throw new NativeFailure\("BACKGROUND_UNAVAILABLE"/)
 })
+test('注入的 TS 源码：`exactOptionalPropertyTypes` 下不把 undefined 显式塞进可选属性', () => {
+  // 上游 `tsconfig.base.json` 开了 exactOptionalPropertyTypes，`{ signal }` 这种写法
+  // 在 signal 可能是 undefined 时会 TS2375（CI 三个产物 job 的真实红因）。
+  const queue = readFileSync(new URL('../portable/cua-bridge-files/cua/system-input-queue.ts', import.meta.url), 'utf8')
+
+  assert.doesNotMatch(queue, /\{\s*resolve,\s*reject,\s*signal\s*\}/,
+    'Waiter 的可选 signal 不能直接赋值：TS2375')
+  assert.match(queue, /\.\.\.\(signal \? \{ signal \} : \{\}\)/,
+    'signal 只能条件展开，这样「没有 signal」就是缺字段而不是显式 undefined')
+  // 也不要用显式 undefined 绕过可选属性。
+
+  assert.doesNotMatch(queue, /signal:\s*undefined/, '不要用显式 undefined 绕过可选属性')
+})
