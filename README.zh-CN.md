@@ -68,7 +68,7 @@
 | 改动 | 原因 | 脚本 |
 |---|---|---|
 | 补齐 deploy 漏掉的依赖 | `pnpm deploy` 会漏掉 workspace 包之间的 peer 和 registry 依赖，还会把包装成符号链接（打 zip 时会丢）；补齐后**声明进清单**，否则插件行会被判为未安装 | `patch-peers.mjs` · `patch-dep.mjs` |
-| Windows CUA helper 是构建产物 | 安装态只 `access()` 已有 `native/bin/win-<arch>/dsh-cua-windows.exe` 且**从不编译**，所以由专门的 `windows-latest` job 跑 locked restore → Protocol.Tests → self-contained publish；payload 带 `cua-helper.json`（逐文件 SHA256、buildKey、以及**打过补丁的**原生源码摘要），三个消费 job 在 stage 之后再校验一遍 | `cua-helper.mjs` · `ci/portable/build-cua-helper.ps1` |
+| Windows CUA helper 是构建产物 | 安装态只 `access()` 已有 `native/bin/win-<arch>/dsh-cua-windows.exe` 且**从不编译**，所以由专门的 `windows-latest` job 跑 locked restore → Protocol.Tests → self-contained publish；payload 带 `cua-helper.json`（逐文件 SHA256、buildKey、以及**这棵 `cua-windows/native` 树本身**的摘要（上游源码从不打补丁；摘要工具还会拒绝被改动过的树）），三个消费 job 在 stage 之后再校验一遍 | `cua-helper.mjs` · `ci/portable/build-cua-helper.ps1` |
 | 禁止桌面打包内部重建 | 上游打包会再跑一次 `build:official`，把产物补丁冲掉；关掉内部重建，并重算客户端构建记录 | `patch-desktop-runtime-patch.mjs`（源码） |
 | 现场修复工具 | 已经装好的旧版桌面端，不重装就修掉 `0xC0000142` | `tools/repair-windows-acl-runner-console.mjs` |
 

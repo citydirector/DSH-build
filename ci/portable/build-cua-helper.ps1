@@ -31,23 +31,19 @@ $outPath = [IO.Path]::GetFullPath((Join-Path (Get-Location) $Out))
 
 if ($Commit -notmatch '^[0-9a-f]{40}$') { throw "Commit 必须是 40 位小写十六进制，实际：$Commit" }
 
-# 原生补丁必须先于 dotnet publish：B 的桥接改了 entry/{Input,DesktopExecutor,Win32}.cs，
-# 只补 TS 不补原生会得到「协议里有新参数、二进制不认识」的 helper。缺失即失败，不跳过。
+# 上游 CUA 源码**不改**：这里 publish 的就是 pin 下来的原始 native 树。
+# 摘要仍要取——它记录「这份二进制是用哪棵树编出来的」，写进 cua-helper.json 供三处消费者核对。
+# 脚本同时是审计器：树若被改过（残留注入），--digest 会拒绝出值，helper 构建随之失败。
 $bridgePath = Join-Path $repoRoot 'portable/patch-cua-ui-locate-bridge.mjs'
 if (-not (Test-Path -LiteralPath $bridgePath)) {
-  throw "缺少 $bridgePath —— ui-locate 桥接补丁未随仓，helper 不能构建（否则会发布旧二进制）"
+  throw "缺少 $bridgePath —— native 摘要工具未随仓，helper 无法证明源码身份"
 }
-Write-Output '== cua-helper: apply ui-locate native bridge before publish'
-& node $bridgePath $rootPath
-if ($LASTEXITCODE -ne 0) { throw "patch-cua-ui-locate-bridge 失败（退出码 $LASTEXITCODE）" }
-
-# 打完补丁再取摘要：它记录的是「实际被编译的原生源码树」，上游同 SHA 未打补丁的 helper 会得到不同值。
-$digestLines = @(& node $bridgePath $rootPath --digest)
+$digestLines = @(& node $bridgePath --digest --root $rootPath)
 if ($LASTEXITCODE -ne 0) { throw "patch-cua-ui-locate-bridge --digest 失败（退出码 $LASTEXITCODE）" }
-# 摘要是**一行 JSON**，但它不一定在最后：桥接脚本的补丁日志可能排在它后面，所以按内容找，不按位置取。
+# 摘要是**一行 JSON**，但不保证在最后（工具的其他输出可能排在其后），所以按内容找，不按位置取。
 $digestJson = @($digestLines | Where-Object { $_ -match '"kind"\s*:\s*"cua-helper-native-source"' })
 if ($digestJson.Count -ne 1) {
-  throw "桥接脚本应输出且只输出一行原生源码摘要，实际 $($digestJson.Count) 行（最后一行：$($digestLines[-1])）"
+  throw "native 摘要工具应输出且只输出一行原生源码摘要，实际 $($digestJson.Count) 行（最后一行：$($digestLines[-1])）"
 }
 $digestJson = $digestJson[0]
 $nativeSourcePath = Join-Path (Split-Path -Parent $outPath) 'cua-native-source.json'

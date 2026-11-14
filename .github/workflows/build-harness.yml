@@ -171,18 +171,18 @@ jobs:
         with:
           name: cua-helper-win-x64
           path: cua-helper
-      # 源码补丁必须早于 stage 与 build:official：默认启用改 official-bundles 的 TypeScript 源，
-      # 桥接补丁改 cua/cua-windows 的 TypeScript 与 C#。任一锚点缺失 → 脚本 exit 1 → 本 job 失败。
-      - name: Apply CUA defaults and the ui-locate bridge
+      # 唯一要改上游源码的步骤：默认启用改 official-bundles 的 TypeScript 源。
+      # 必须早于 build:official（它编译 src/bundles.ts）；锚点缺失 → 脚本 exit 1 → 本 job 失败。
+      # 上游 CUA 源码不动，所以这里没有 CUA 源码补丁。
+      - name: Apply CUA default bundle
+        run: node _build_repo/portable/patch-cua-defaults.mjs .
+      # 取原生源码摘要：helper 是在**这棵（原样的）** native 树上编译的，digest 相同才算同一份。
+      # 摘要工具对被污染的上游树会拒绝出值，所以这一步同时是「源码没被动过」的守门。
+      - name: Capture the native source digest
         run: |
-          node _build_repo/portable/patch-cua-defaults.mjs .
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
-      # 打完补丁再取原生源码摘要：helper 是在**补丁后**的源码上编译的，只有 digest 相同才算同一份。
-      - name: Capture the patched native source digest
-        run: |
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs --digest --root . > native-digest.log 2>&1
           grep '"kind":"cua-helper-native-source"' native-digest.log > native-source.json
-          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('native 摘要工具没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
       - name: Stage the Windows helper into the upstream tree
         run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       - name: Install dependencies
@@ -238,9 +238,8 @@ jobs:
       - name: Show toolchain versions
         run: pnpm --version; node --version
       # 全部补丁单测（独立 fixtures，不依赖上游构建产物，因此放在 install 之前）。
-      # **必须在源码补丁之前跑**：桥接补丁的用例要一份**未打补丁**的上游树来自己打 11 条编辑，
-      # 树已被打过时它只会看到「0 edits」并断言失败。UI_LOCATE_UPSTREAM 指本次 checkout 的上游；
-      # 不给它，那组用例会跳过（= 假绿）。
+      # 必须在构建（install / build:official）之前跑：摘要与审计用例需要一份 pin 原始形状的上游树，
+      # 通过 UI_LOCATE_UPSTREAM 指过去；缺树时那组用例会跳过（= 假绿），所以这一步必须先于构建。
       - name: Run patch tests
         env:
           UI_LOCATE_UPSTREAM: ${{ github.workspace }}
@@ -252,19 +251,18 @@ jobs:
         with:
           name: cua-helper-win-x64
           path: cua-helper
-      # 源码补丁必须早于 stage 与 build:official（它编译 official-bundles 的 TS 与 cua 的 TS）。
-      - name: Apply CUA defaults and the ui-locate bridge
+      # 唯一要改上游源码的步骤：默认启用改 official-bundles 的 TS（build:official 编译它）。
+      # 上游 CUA 源码不动。
+      - name: Apply CUA default bundle
+        run: node _build_repo/portable/patch-cua-defaults.mjs .
+      # 取原生源码摘要：只认这棵原样 native 树上编译的 helper，digest 不符即拒绝。
+      - name: Capture the native source digest
         run: |
-          node _build_repo/portable/patch-cua-defaults.mjs .
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
-      # 打完补丁再取原生源码摘要：helper 是在补丁后的源码上编译的，digest 不符即拒绝。
-      - name: Capture the patched native source digest
-        run: |
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs --digest --root . > native-digest.log 2>&1
           $hit = @(Get-Content native-digest.log | Where-Object { $_ -match '"kind"\s*:\s*"cua-helper-native-source"' })
-          if ($hit.Count -ne 1) { throw "桥接脚本应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
+          if ($hit.Count -ne 1) { throw "native 摘要工具应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
           Set-Content -Path native-source.json -Value $hit[0] -Encoding utf8NoBOM
-          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('native 摘要工具没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
       - name: Stage the Windows helper into the upstream tree
         run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       - name: Install dependencies (hoisted)
@@ -350,9 +348,9 @@ jobs:
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version; node --version
-      # 与 portable 同理：测试在源码补丁**之前**、install 之前跑（夹具自带依赖，零 npm 依赖）。
+      # 与 portable 同理：测试在 install 之前跑（夹具自带依赖，零 npm 依赖）。
       # DSH_DESKTOP_SOURCE 让 ACL 控制台补丁的测试连上游源码那半一起跑（否则静默跳过）；
-      # UI_LOCATE_UPSTREAM 让桥接用例拿到未打补丁的上游树（否则跳过 = 假绿）。
+      # UI_LOCATE_UPSTREAM 让审计用例拿到 pin 原始形状的上游树（否则跳过 = 假绿）。
       - name: Run patch tests
         env:
           DSH_DESKTOP_SOURCE: ${{ github.workspace }}
@@ -365,19 +363,17 @@ jobs:
         with:
           name: cua-helper-win-x64
           path: cua-helper
-      # 桌面端的源码补丁（默认启用 + 桥接）同样必须早于 install/build:official；
-      # build-desktop.mjs 里还会再跑一遍（幂等），并在补丁之后自取 digest 校验 helper。
-      - name: Apply CUA defaults and the ui-locate bridge
+      # 桌面端的默认启用补丁同样必须早于 install/build:official；build-desktop.mjs 里还会再跑一遍（幂等），
+      # 并在其后自取 digest 校验 helper。上游 CUA 源码不动。
+      - name: Apply CUA default bundle
+        run: node _build_repo/portable/patch-cua-defaults.mjs .
+      - name: Capture the native source digest
         run: |
-          node _build_repo/portable/patch-cua-defaults.mjs .
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs .
-      - name: Capture the patched native source digest
-        run: |
-          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs . --digest > native-digest.log 2>&1
+          node _build_repo/portable/patch-cua-ui-locate-bridge.mjs --digest --root . > native-digest.log 2>&1
           $hit = @(Get-Content native-digest.log | Where-Object { $_ -match '"kind"\s*:\s*"cua-helper-native-source"' })
-          if ($hit.Count -ne 1) { throw "桥接脚本应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
+          if ($hit.Count -ne 1) { throw "native 摘要工具应输出且只输出一行原生源码摘要，实际 $($hit.Count) 行" }
           Set-Content -Path native-source.json -Value $hit[0] -Encoding utf8NoBOM
-          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('桥接脚本没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
+          node -e "const s=require('./native-source.json');if(s.kind!=='cua-helper-native-source')throw new Error('native 摘要工具没有输出原生源码摘要');console.log('native digest', s.digest, s.fileCount, 'files')"
       - name: Stage the Windows helper into the upstream tree
         run: node _build_repo/portable/cua-helper.mjs stage --from cua-helper --root . --commit ${{ needs.check.outputs.sha }} --native-source-file native-source.json
       # 桌面端不部署，所以**不加** node-linker=hoisted：prepare-*/electron-builder 都按上游 workspace 布局写的。
