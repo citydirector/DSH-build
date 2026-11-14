@@ -97,18 +97,6 @@ const EDITS = [
       + '        }',
   },
   {
-    name: 'cua: CapabilitiesResult 保留 provider 声明的 deliveryModes',
-    file: `${CUA}/protocol.ts`,
-    from: "  methods: z.array(z.string()), coordinateSpace: z.literal('screenshot-pixels'), browser: z.literal(false),\n})",
-    to: "  methods: z.array(z.string()), coordinateSpace: z.literal('screenshot-pixels'), browser: z.literal(false),\n"
-      + '  /**\n'
-      + '   * Ways a coordinate click can reach a target, declared by the provider; native never fills it, so it is\n'
-      + '   * absent when the provider declares none — never an empty array standing in for \"unknown\".\n'
-      + '   */\n'
-      + "  deliveryModes: z.array(z.enum(['background', 'foreground'])).optional(),\n"
-      + '})',
-  },
-  {
     name: 'cua: click 增加 deliveryMode',
     file: `${CUA}/protocol.ts`,
     from: 'const click = { ...pointer, clickCount: z.union([z.literal(1), z.literal(2)]).optional(),\n'
@@ -312,6 +300,32 @@ const EDITS = [
     file: `${CUA}/api.ts`,
     from: '        return base.action(\'click\', { ...coordinateParams(appHandle, windowId), x, y, mouseButton, clickCount, ...modifiers, ...hold, ...relative })',
     to: '        return base.action(\'click\', { ...coordinateParams(appHandle, windowId), x, y, mouseButton, clickCount, ...modifiers, ...hold, ...relative, ...delivery })',
+  },
+  {
+    name: 'cua: 读原始响应里的 deliveryModes（不经过 zod 推断，公共类型不变）',
+    file: `${CUA}/api.ts`,
+    from: 'export function createCuaApi(dispatch: CuaDispatch): CuaApi {',
+    to: 'function readDeliveryModes(value: JsonValue): (\'background\' | \'foreground\')[] | undefined {\n'
+      + '  if (typeof value !== \'object\' || value === null || Array.isArray(value)) return undefined\n'
+      + '  const declared = value.deliveryModes\n'
+      + '  if (!Array.isArray(declared)) return undefined\n'
+      + '  const modes = declared.filter((mode): mode is \'background\' | \'foreground\' => mode === \'background\' || mode === \'foreground\')\n'
+      + '  return modes.length === 0 ? undefined : modes\n'
+      + '}\n'
+      + '\n'
+      + 'export function createCuaApi(dispatch: CuaDispatch): CuaApi {',
+  },
+  {
+    name: 'cua: getCapabilities 带上 provider 声明的 deliveryModes',
+    file: `${CUA}/api.ts`,
+    from: '      capabilities = CapabilitiesResult.parse(await call(\'getCapabilities\', {}))\n      return capabilities',
+    to: '      const raw = await call(\'getCapabilities\', {})\n'
+      + '      // provider 把投递能力合并进原生响应，可这个位不在 native 协议里，CapabilitiesResult 解析时会丢掉它；\n'
+      + '      // 所以从原始响应里挑出来再挂回去，并且只收形状正确的枚举字符串，不把未知数据带进能力对象。\n'
+      + '      const declared = readDeliveryModes(raw)\n'
+      + '      const parsed = CapabilitiesResult.parse(raw)\n'
+      + '      capabilities = declared === undefined ? parsed : Object.assign(parsed, { deliveryModes: declared })\n'
+      + '      return capabilities',
   },
 ]
 

@@ -63,12 +63,12 @@ const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
 
 // ── 真实上游上打补丁 ────────────────────────────────────────────────────────
 
-test('patch：在真实固定上游上把三份注入文件与十九条编辑全部打进去', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('patch：在真实固定上游上把三份注入文件与十八条编辑全部打进去', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
   const parts = patchCuaUiLocateBridge(root)
   assert.deepEqual(parts, [
     'packages/experimental/cua/src/index.ts: 4 edits',
-    'packages/experimental/cua/src/protocol.ts: 2 edits',
+    'packages/experimental/cua/src/protocol.ts: 1 edits',
     'packages/experimental/cua/src/types.ts: 2 edits',
     'packages/experimental/cua-windows/src/index.ts: 1 edits',
     'packages/experimental/cua-windows/src/guidance.ts: 1 edits',
@@ -76,7 +76,7 @@ test('patch：在真实固定上游上把三份注入文件与十九条编辑全
     'packages/experimental/cua-windows/native/entry/DesktopExecutor.cs: 2 edits',
     'packages/experimental/cua-windows/native/entry/Input.cs: 2 edits',
     'packages/experimental/cua/src/guidance.ts: 2 edits',
-    'packages/experimental/cua/src/api.ts: 2 edits',
+    'packages/experimental/cua/src/api.ts: 4 edits',
   ])
   for (const name of ['cua-dispatch.ts', 'cua-dispatch-guard.ts', 'system-input-queue.ts']) {
     assert.ok(existsSync(join(root, 'packages/experimental/cua/src', name)), `${name} 必须被注入`)
@@ -478,57 +478,94 @@ const CAPABILITIES_BASE = {
   browser: false,
 }
 
-test('patch：deliveryModes 由 provider 声明，经 CapabilitiesResult 保留、未声明就不出现', { skip: haveUpstream ? false : missingUpstream }, (t) => {
+test('patch：deliveryModes 从原始响应读出并挂回能力对象，公共类型不动', { skip: haveUpstream ? false : missingUpstream }, (t) => {
   const root = mirror(t)
   patchCuaUiLocateBridge(root)
+  const api = read(root, 'packages/experimental/cua/src/api.ts')
 
-  // 程序绑定那条路会拿 CapabilitiesResult 解析结果；schema 里没有这个键，provider 合并进去也会被剥掉。
-  assert.match(read(root, 'packages/experimental/cua/src/protocol.ts'),
-    /deliveryModes: z\.array\(z\.enum\(\['background', 'foreground'\]\)\)\.optional\(\),/,
-    'CapabilitiesResult 必须能承载 deliveryModes')
+  // 读出来的值必须校验过：只认枚举里的字符串，别把 provider 顺手塞的东西带进来。
+  assert.match(api, /function readDeliveryModes\(value: JsonValue\): \('background' \| 'foreground'\)\[\] \| undefined \{/,
+    'api.ts 要有 readDeliveryModes')
+  assert.match(api, /mode === 'background' \|\| mode === 'foreground'/, '只收枚举内的值')
+  assert.match(api, /return modes\.length === 0 \? undefined : modes/, '空数组等于没声明')
+  assert.match(api, /capabilities = declared === undefined \? parsed : Object\.assign\(parsed, \{ deliveryModes: declared \}\)/,
+    '声明了才挂上去')
+
+  // schema 里绝不能有 deliveryModes：zod 的 .optional() 推断出 `| undefined`，CuaCapabilities 就不满足 JsonValue（真 CI 的 TS2322）。
+  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/protocol.ts'), /deliveryModes/,
+    'CapabilitiesResult 不能声明这个字段')
+  // 反向也要守住：不能靠 passthrough 绕过（zod v4 的 passthrough 会给输出类型加 unknown 索引签名，同样撞 JsonValue）。
+  assert.doesNotMatch(read(root, 'packages/experimental/cua/src/protocol.ts'), /\.passthrough\(\)/,
+    'passthrough 会让输出类型多出 unknown 索引签名')
+
   const index = read(root, 'packages/experimental/cua/src/index.ts')
   assert.match(index, /\.\.\.\(capabilities\.deliveryModes === undefined \? \{\} : \{ deliveryModes: \[\.\.\.capabilities\.deliveryModes\] \}\),/,
-    'provider 声明了才合并进去')
-  assert.doesNotMatch(index, /\?\? \['foreground'\]/,
-    '不能用缺省值把「provider 没声明」伪装成支持 background')
+    'provider 声明了才合并进 getCapabilities 响应')
+  assert.doesNotMatch(index, /\?\? \['foreground'\]/, '不能用缺省值把「未声明」伪装成支持')
 })
 
 // 负控制：同一组结构断言打在未打补丁的真实上游上必须失败。
-test('patch：未打补丁的 protocol.ts / index.ts 过不了 deliveryModes 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
-  const rawProtocol = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'utf8')
+test('patch：未打补丁的 api.ts / index.ts 过不了 deliveryModes 断言（负控制）', { skip: haveUpstream ? false : missingUpstream }, () => {
+  const rawApi = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
   const rawIndex = readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/index.ts'), 'utf8')
-  assert.doesNotMatch(rawProtocol, /deliveryModes/, '上游 CapabilitiesResult 本来没有这个字段')
+  assert.doesNotMatch(rawApi, /readDeliveryModes/, '上游 api.ts 本来不读这个键')
   assert.doesNotMatch(rawIndex, /deliveryModes/, '上游 callNative 的 getCapabilities 合并本来不碰它')
 })
 
-/** 把一份 protocol.ts 拷进 zod 探针目录并 import 回来（目录里已有 zod 与 type:module 的 package.json）。 */
-async function loadCapabilitiesFrom(source, label) {
-  const name = `capabilities-${label}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.ts`
-  const target = join(ZOD_PROBE, name)
-  writeFileSync(target, readFileSync(source))
+/** 把打过补丁的 protocol.ts / api.ts 拷进本地 zod 探针目录并 import 回来（目录里已有 zod 与 type:module）。 */
+async function loadCuaApiFrom(root, label) {
+  const name = `api-${label}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  const protocolTarget = join(ZOD_PROBE, `${name}-protocol.ts`)
+  const apiTarget = join(ZOD_PROBE, `${name}-api.ts`)
+  writeFileSync(protocolTarget, readFileSync(join(root, 'packages/experimental/cua/src/protocol.ts'), 'utf8'))
+  // api.ts 用相对路径 import './protocol.ts'，两条都拷进同一目录后名字必须对得上。
+  writeFileSync(apiTarget, readFileSync(join(root, 'packages/experimental/cua/src/api.ts'), 'utf8')
+    .replace("from './protocol.ts'", `from './${name}-protocol.ts'`))
   try {
-    const mod = await import(new URL(`./${name}`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)
-    return mod.CapabilitiesResult
+    const mod = await import(new URL(`./${name}-api.ts`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)
+    return mod.createCuaApi
   } finally {
-    rmSync(target, { force: true })
+    rmSync(protocolTarget, { force: true })
+    rmSync(apiTarget, { force: true })
   }
 }
 
-// 行为测试：真的让 zod 解析一遍，不是只读文本。
-test('behavior：打了补丁的 CapabilitiesResult 保留 provider 声明的 deliveryModes、未声明则不发明', { skip: haveZod ? false : missingZod }, async (t) => {
+/** 一个只回答 getCapabilities 的假分发面；provider 合并后的响应长这样。 */
+const dispatchReturning = (payload) => async () => payload
+
+// 行为测试：真的跑补丁产物的 api.ts，不是只读文本。
+test('behavior：声明了就出现在 getCapabilities() 里，没声明就没有这个键', { skip: haveZod ? false : missingZod }, async (t) => {
   const root = mirror(t)
   patchCuaUiLocateBridge(root)
+  const createCuaApi = await loadCuaApiFrom(root, 'patched')
 
-  // protocol.ts 只 import node:buffer 与 zod（types 是 import type，类型擦除后不解析），拷进带 zod 的目录就能跑。
-  const patched = await loadCapabilitiesFrom(join(root, 'packages/experimental/cua/src/protocol.ts'), 'patched')
-  const declared = patched.parse({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })
+  const declared = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })).getCapabilities()
   assert.deepEqual(declared.deliveryModes, ['foreground', 'background'])
 
-  const undeclared = patched.parse(CAPABILITIES_BASE)
+  const undeclared = await createCuaApi(dispatchReturning(CAPABILITIES_BASE)).getCapabilities()
   assert.equal('deliveryModes' in undeclared, false, '没声明就该没有这个键，而不是 [] 或 undefined')
 
-  // 负控制：同一份 payload 用未打补丁的 schema 解析，声明的能力会被剥掉——这正是真机里模型看不到它的原因。
-  const raw = await loadCapabilitiesFrom(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'raw')
-  const stripped = raw.parse({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })
-  assert.equal('deliveryModes' in stripped, false, '未打补丁的 CapabilitiesResult 会剥掉这个键')
+  // 脏数据不进门：非枚举值被过滤掉，全被过滤就等于没声明。
+  const dirty = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['background', 'teleport'] })).getCapabilities()
+  assert.deepEqual(dirty.deliveryModes, ['background'])
+  const junk = await createCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: 'yes' })).getCapabilities()
+  assert.equal('deliveryModes' in junk, false, '不是数组就当没声明')
+
+  // 负控制：未打补丁的 api.ts 即使拿到同样响应，也读不到这个键。
+  const rawCreateCuaApi = await (async () => {
+    const name = `raw-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+    const protocolTarget = join(ZOD_PROBE, `${name}-protocol.ts`)
+    const apiTarget = join(ZOD_PROBE, `${name}-api.ts`)
+    writeFileSync(protocolTarget, readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/protocol.ts'), 'utf8'))
+    writeFileSync(apiTarget, readFileSync(join(UPSTREAM, 'packages/experimental/cua/src/api.ts'), 'utf8')
+      .replace("from './protocol.ts'", `from './${name}-protocol.ts'`))
+    try {
+      return (await import(new URL(`./${name}-api.ts`, new URL(`file:///${ZOD_PROBE.replaceAll('\\', '/')}/`)).href)).createCuaApi
+    } finally {
+      rmSync(protocolTarget, { force: true })
+      rmSync(apiTarget, { force: true })
+    }
+  })()
+  const stripped = await rawCreateCuaApi(dispatchReturning({ ...CAPABILITIES_BASE, deliveryModes: ['foreground', 'background'] })).getCapabilities()
+  assert.equal('deliveryModes' in stripped, false, '未打补丁的 api.ts 会把 provider 声明的能力丢掉')
 })
