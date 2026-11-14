@@ -92,8 +92,21 @@ const EDITS = [
     to: '          keyboard: [...capabilities.keyboard],\n'
       + '          browser: capabilities.browser,\n'
       + '          coordinateSpace: capabilities.coordinateSpace,\n'
-      + '          deliveryModes: [...(capabilities.deliveryModes ?? [\'foreground\'])],\n'
+      + '          // provider 声明了才报：native 不知道这个能力位，没声明就当它不存在，绝不用空数组伪装支持。\n'
+      + '          ...(capabilities.deliveryModes === undefined ? {} : { deliveryModes: [...capabilities.deliveryModes] }),\n'
       + '        }',
+  },
+  {
+    name: 'cua: CapabilitiesResult 保留 provider 声明的 deliveryModes',
+    file: `${CUA}/protocol.ts`,
+    from: "  methods: z.array(z.string()), coordinateSpace: z.literal('screenshot-pixels'), browser: z.literal(false),\n})",
+    to: "  methods: z.array(z.string()), coordinateSpace: z.literal('screenshot-pixels'), browser: z.literal(false),\n"
+      + '  /**\n'
+      + '   * Ways a coordinate click can reach a target, declared by the provider; native never fills it, so it is\n'
+      + '   * absent when the provider declares none — never an empty array standing in for \"unknown\".\n'
+      + '   */\n'
+      + "  deliveryModes: z.array(z.enum(['background', 'foreground'])).optional(),\n"
+      + '})',
   },
   {
     name: 'cua: click 增加 deliveryMode',
