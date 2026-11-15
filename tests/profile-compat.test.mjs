@@ -341,7 +341,7 @@ const DEV_SHAPED = [
 
 test('回到 stable：运行时又有 /list-agents 子路径时把整块补回来', () => {
   // 从 dev 回退到 stable 必须能把这条加回来 —— stable 的主入口不注册 list_agents，
-  // 子路径是它唯一的提供者，缺了工具就消失（这正是我们回退后遇到的一半问题）。
+  // 子路径是它唯一的提供者，缺了工具就消失（旧 provider 回退后遇到的一半问题就是它）。
   const result = migratePatchText(DEV_SHAPED, stableRuntime())
   assert.equal(result.text.includes('tool-subagent-list-agents'), true)
   assert.equal(result.text.includes(LIST_AGENTS), true)

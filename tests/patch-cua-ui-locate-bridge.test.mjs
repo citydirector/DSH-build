@@ -1,7 +1,7 @@
 /**
  * `portable/patch-cua-ui-locate-bridge.mjs` 的测试。
  *
- * 2026-11-14 起这个脚本**不再改上游源码**（我们止损决定：撤销全部本地注入），只做两件事：
+ * 这个脚本**不改上游源码**（本地注入已全部撤销），只做两件事：
  *   1. 审计上游 CUA 源码是否仍是 pin 的原始形状（`--check`）；
  *   2. 算 `cua-windows/native` 整树摘要，作为 helper 的 build identity（`--digest`）。
  *

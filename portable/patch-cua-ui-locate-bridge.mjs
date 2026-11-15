@@ -1,6 +1,6 @@
 // patch-cua-ui-locate-bridge.mjs (--check | --digest) [--root <upstream-repo-root>]
 //
-// **只读工具，不改上游任何源码。** 2026-11-14 我们止损决定：撤销我们对上游 CUA 源码的全部注入
+// **只读工具，不改上游任何源码。** 本仓不向上游 CUA 源码注入代码
 // （dispatch 分发面、系统输入队列、`deliveryMode` schema/能力位/guidance、Windows 后台投递），
 // 只保留「新链默认启用 + helper 随包 + 完整性摘要」三件事。本脚本因此只做审计与摘要，不改上游一行源码：
 //

@@ -179,7 +179,7 @@ function main() {
   // 新 Computer Use 链默认启用：改 official-bundles 的 web 模板（desktop 复用）与通用默认。
   // 必须早于 build:official —— 它编译的是 src/bundles.ts。
   run('patch', process.execPath, [join(HERE, 'patch-cua-defaults.mjs'), SOURCE])
-  // 我们 2026-11-14 的止损决定：**不再修改上游 CUA 源码**（dispatch / 系统输入队列 / deliveryMode /
+  // 不修改上游 CUA 源码（dispatch / 系统输入队列 / deliveryMode /
   // Windows 后台投递全部撤回）。产物只保留「新链默认启用 + helper 随包 + 完整性摘要」。
   // 摘要工具要存在：缺失说明 build 仓不完整，直接失败，不允许产出一个没有源码身份证明的 helper。
   const bridge = join(HERE, 'patch-cua-ui-locate-bridge.mjs')
