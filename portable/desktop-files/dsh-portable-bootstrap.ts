@@ -61,6 +61,21 @@ function readVersion(exeDirectory: string): string {
   }
 }
 
+/**
+ * The glue fingerprint the build stamps into the package root (`GLUE`): a digest of
+ * this repo's own content. `VERSION` only names the upstream commit, so a fix that
+ * lives entirely in the glue — a patch script, the launcher, this very migration —
+ * leaves `VERSION` untouched. Keying the migration marker on `VERSION` alone would
+ * then skip the rerun that fix needs, and the profile would stay in the old dialect.
+ */
+function readGlue(exeDirectory: string): string {
+  try {
+    return readFileSync(join(exeDirectory, 'GLUE'), 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
+
 /** Point every Electron-owned directory at the package instead of the user profile. */
 function redirectElectronPaths(dataRoot: string): void {
   for (const name of ELECTRON_PATH_NAMES) {
@@ -158,13 +173,18 @@ function migrateSessionsOnce(dataRoot: string, exeDirectory: string): boolean {
  */
 function migrateProfilesOnce(dataRoot: string, exeDirectory: string): boolean {
   const version = readVersion(exeDirectory)
+  const glue = readGlue(exeDirectory)
+  // Which runtime last succeeded = upstream commit **plus** glue fingerprint. The glue
+  // alone can change what this migration does (that is how the cua-bundle fix ships),
+  // so a marker that ignores it would let a glue-only update skip the rewrite.
+  const stamp = glue === '' ? version : `${version} ${glue}`
   const markerDirectory = join(dataRoot, MIGRATION_MARKER_DIRECTORY)
   const marker = join(markerDirectory, PROFILE_MARKER)
   // A marker per version would skip the rerun that matters most: dev -> main -> dev.
   // Each hop rewrites the profiles for the runtime it lands on, so returning to a
   // version whose marker already exists would leave files in the other dialect.
   // One marker recording which runtime last succeeded answers the real question.
-  if (readMarkerVersion(marker) === version) return false
+  if (readMarkerVersion(marker) === stamp) return false
   const migrator = join(process.resourcesPath, 'dsh-build', 'migrate-profiles.mjs')
   if (!existsSync(migrator)) return false
   const runtimeDirectory = join(process.resourcesPath, 'app.asar', 'dsh')
@@ -185,7 +205,7 @@ function migrateProfilesOnce(dataRoot: string, exeDirectory: string): boolean {
   if (result.stdout !== undefined && result.stdout.trim() !== '') {
     console.log(`portable bootstrap: ${result.stdout.trim().split(/\r?\n/u).join(' | ')}`)
   }
-  writeFileSync(marker, `${version}\n`)
+  writeFileSync(marker, `${stamp}\n`)
   return true
 }
 

@@ -423,13 +423,18 @@ class DshLauncher
             string read = File.ReadAllText(versionFile).Trim();
             if (read.Length > 0) version = read;
         }
+        // 胶水指纹（本仓库内容摘要，构建期写进包根的 GLUE）。上游提交号没动、胶水改了 = 也是新包：
+        // 只比 VERSION 会让这种修复「更新得下来、迁移却不跑」，而 profile 的修复恰恰住在胶水里。
+        string glueFile = Path.Combine(baseDir, "GLUE");
+        string glue = File.Exists(glueFile) ? File.ReadAllText(glueFile).Trim() : "";
+        string stamp = glue == "" ? version : version + " " + glue;
 
         string markerDir = Path.Combine(dataDir, ".migrations");
         // 标记只记「上一次成功迁移时用的是哪个运行时版本」，不按版本各存一个：
         // dev → main → dev 这种来回切里，回到某个版本时若旧标记还在就会被跳过，
         // 而配置此刻已经被上一跳改成了对面的口径。版本没变才跳过。
         string doneMarker = Path.Combine(markerDir, "profile-compat.done");
-        if (!force && ReadMarkerVersion(doneMarker) == version)
+        if (!force && ReadMarkerVersion(doneMarker) == stamp)
             return 2;   // 这一版已经处理过：静默跳过
 
         // 没有 profiles 目录 = 还没建过任何会话，没什么可迁的（也不该为它建目录）。
@@ -460,8 +465,8 @@ class DshLauncher
             }
             if (proc.ExitCode == 0)
             {
-                // 只写版本号本身，读回来的比较就不会有歧义。
-                try { File.WriteAllText(doneMarker, version); } catch { }
+                // 只写打点值本身（版本 + 胶水），读回来的比较就不会有歧义。
+                try { File.WriteAllText(doneMarker, stamp); } catch { }
                 return 0;
             }
             // 失败不写 done 标记：下一个版本、或手动 --migrate-profiles 还能再试一次。
