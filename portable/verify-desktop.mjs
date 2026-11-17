@@ -33,6 +33,17 @@ function main() {
   check(existsSync(join(stage, 'DeepSeek Harness.exe')), 'entry executable')
   check(existsSync(join(stage, 'portable.flag')), 'portable.flag')
   check(existsSync(join(stage, 'VERSION')), 'VERSION')
+  // 胶水指纹：update.exe 与启动期配置迁移靠它认出"上游没动、只有本仓改"的更新；
+  // 值从构建环境继承（CI 传 DSH_GLUE），本地无该变量时只提示不断言相等。
+  const gluePath = join(stage, 'GLUE')
+  const expectedGlue = (process.env.DSH_GLUE ?? '').trim()
+  if (existsSync(gluePath)) {
+    const shippedGlue = readFileSync(gluePath, 'utf8').trim()
+    check(shippedGlue !== '', 'GLUE not empty')
+    if (expectedGlue !== '') check(shippedGlue === expectedGlue, 'GLUE matches the build glue', shippedGlue + ' vs ' + expectedGlue)
+  } else if (expectedGlue !== '') {
+    problems.push('FAIL GLUE missing — DSH_GLUE was set for this build, so the package must ship it')
+  } else notes.push('note GLUE absent (local build without DSH_GLUE)')
   const manifestPath = join(stage, 'update.json')
   check(existsSync(manifestPath), 'update.json')
   if (existsSync(manifestPath)) {

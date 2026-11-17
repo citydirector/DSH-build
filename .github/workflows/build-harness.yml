@@ -325,6 +325,10 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    # 与 Release body 的 glue 行同源。产物根必须带 GLUE：没有它，桌面通道只能用上游提交号
+    # 判更新，本仓内容改变（补丁、启动器、迁移）一律送不到已安装的机器上。
+    env:
+      DSH_GLUE: ${{ needs.check.outputs.glue }}
     steps:
       - uses: actions/checkout@v7
         with:

@@ -255,6 +255,16 @@ function main() {
   if (!existsSync(join(STAGE, PRODUCT_EXE))) throw new Error('assemble: ' + PRODUCT_EXE + ' missing from ' + unpacked)
   writeFileSync(join(STAGE, 'portable.flag'), 'DSH-build portable desktop package\n')
   writeFileSync(join(STAGE, 'VERSION'), TAG + '\n')
+  // 胶水指纹：上游提交号没动、只有本仓内容变了时，update.exe 与启动期配置迁移都靠它认出新东西。
+  // 值由发布流水线经 DSH_GLUE 传入，与 Release body 的 `glue:` 行同源；本地手工构建可以没有。
+  const buildGlue = (process.env.DSH_GLUE ?? '').trim()
+  if (buildGlue === '') {
+    // 本地构建允许缺；CI 里缺了就是一版永远收不到"只改胶水"更新的产物，直接失败。
+    if (process.env.GITHUB_ACTIONS === 'true') throw new Error('assemble: DSH_GLUE is required in CI — the package must ship GLUE or updates can only follow the upstream commit')
+    log('assemble', 'WARN DSH_GLUE is unset; the package ships without GLUE')
+  } else {
+    writeFileSync(join(STAGE, 'GLUE'), buildGlue + '\n')
+  }
   writeFileSync(join(STAGE, 'update.json'), JSON.stringify({
     kind: 'desktop',
     repo: 'citydirector/DSH-build',
