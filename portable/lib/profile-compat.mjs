@@ -52,9 +52,11 @@ const AUTO_MIGRATABLE_LEGACY_ROWS = new Map([
  */
 const LEGACY_REGISTRY_NAME = '@deepseek-ai/dsh-computer-use'
 const LEGACY_REGISTRY_IDS = new Set(['computer-use'])
-/** 新链入口在 profile 里用的 id；迁移前必须确认它没被别的插件占着。 */
-const CUA_BUNDLE_ID = 'cua-bundle'
-/** 新链的入口包：bundle 自带 registry 与平台 provider。 */
+/**
+ * 新链的入口包。**它是 bundle 载体，不是插件**：`lib/index.js` 全文只有一个 `export {}`，
+ * 真正的插件行写在它自己的 `cordis.patch.yml` 里。引入方式只有 profile package.json 的
+ * `dsh.profile.bundles` —— 写成插件行会让整份配置装载失败，见 `stripMisusedBundleRows()`。
+ */
 const CUA_BUNDLE = '@deepseek-ai/dsh-cua-bundle'
 const CUA_PROVIDER_PACKAGES = new Set([CUA_BUNDLE, '@deepseek-ai/dsh-cua-windows', '@deepseek-ai/dsh-cua-macos'])
 
@@ -340,13 +342,58 @@ function dropDeadKeys(lines, keys, changes) {
 }
 
 /**
- * 5. 旧 Computer Use provider → `@deepseek-ai/dsh-cua-bundle`。
+ * 5a. 擦掉「把 dsh-cua-bundle 当插件写」的行 —— 这一行**必定**让整份配置装载失败。
+ *
+ * 证据（DSH 0.2.2-rc.3 实测）：该包的 `lib/index.js` 全文只有一个 `export {}`，真正的
+ * 插件行在它自己的 `cordis.patch.yml` 里，靠 package.json 的 `dsh.bundle.patch` 挂进配置树。
+ * 把它写成插件行时，cordis-plugin-loader 的 `_init()` 先 `unwrapExports(namespace)`：空命名
+ * 空间没有 default 也没有 __esModule，原样返回一个对象；`registry.plugin(对象)` 的 `resolve()`
+ * 既不是函数也没有 apply，于是抛
+ *   invalid plugin, expect function or object with an "apply" method, received object
+ * 而 `_init()` 只 catch import 失败，这条抛错冒泡到 `Entry.update()`，整次 include apply 失败。
+ * 用户看到的是「装 / 更新任何插件都报 apply 失败」，pnpm 那一步却是成功的 —— 因为每次安装
+ * 都会整树重 apply，而毒行每次都在。
+ *
+ * 块内的注释原样留下：那是用户的心智记录，不该跟着错误行一起丢。
+ * @returns {{lines: string[], removed: number, wantsBundle: boolean}}
+ */
+function stripMisusedBundleRows(lines, changes) {
+  const blocks = pluginBlocks(lines).filter((block) => block.name === CUA_BUNDLE)
+  if (blocks.length === 0) return { lines, removed: 0, wantsBundle: false }
+  let result = lines.slice()
+  let removed = 0
+  let wantsBundle = false
+  // 行号从后往前改，前面的行号才不会漂移
+  for (const block of blocks.slice().sort((left, right) => right.start - left.start)) {
+    const body = lines.slice(block.start, block.end)
+    const disabled = body.some((line) => {
+      const key = rowKey(line, 'disabled')
+      return key !== undefined && key.value === 'true'
+    })
+    const comments = body.filter((line) => /^[ \t]*#/u.test(line))
+    result.splice(block.start, block.end - block.start, ...comments)
+    removed++
+    if (!disabled) wantsBundle = true
+    changes.push({
+      kind: 'computer-use',
+      detail: '删除把 ' + CUA_BUNDLE + ' 当插件写的行' + (disabled ? '（该行已停用）' : '') + '：它是 bundle 载体，写成插件会让整份配置装载失败；引入方式改回 profile 的 dsh.profile.bundles',
+    })
+  }
+  return { lines: result, removed, wantsBundle }
+}
+
+/**
+ * 5b. 旧 Computer Use provider → 运行时自带的 dsh-cua-bundle。
+ *
+ * 迁移只做删除（旧 provider 行 + 旧注册表行），**不再往配置里写插件行**：bundle 载体不能
+ * 当插件用（见 stripMisusedBundleRows 的说明），入口是 dsh.profile.bundles。真删掉了旧链
+ * 才把 state.bundleNeeded 置为 true，由 migrateProfile() 落盘。
  *
  * 只认精确包名，且只在「没有任何新链行」时替换。旧配置可能是用户自己写的，猜错就等于
  * 擅自替他换了工具面 —— 所以带自定义 config、显式停用、或已与新链并存的一律不碰，
  * 只留一条 warning。迁移的目标是「让默认链干净」，不是「把用户的选择改掉」。
  */
-function migrateComputerUse(lines, changes, warnings) {
+function migrateComputerUse(lines, changes, warnings, state) {
   const blocks = pluginBlocks(lines)
   const candidates = blocks.filter((block) => block.name !== undefined && LEGACY_COMPUTER_USE_PROVIDERS.has(block.name))
   if (candidates.length === 0) return lines
@@ -372,24 +419,8 @@ function migrateComputerUse(lines, changes, warnings) {
     })
     return lines
   }
-  // 目标 id 必须没被别的插件占着：撞了就会写出两行同 id，cordis 装载直接失败。
-  const occupied = blocks.find((block) => block.id === CUA_BUNDLE_ID && !legacy.includes(block))
-  if (occupied !== undefined) {
-    warnings.push({
-      kind: 'computer-use',
-      detail: `配置里已经有 id: ${CUA_BUNDLE_ID} 的插件（name ${occupied.name ?? '未知'}），再迁一条会造出重复 id；已跳过迁移，请人工确认`,
-    })
-    return lines
-  }
-  // 旧行可能散落在多个父节点（多个 `- insert:` 段）里；每段各写一条 bundle 会造出重复 id。
-  const parents = new Set(legacy.map((block) => block.parent))
-  if (parents.size > 1) {
-    warnings.push({
-      kind: 'computer-use',
-      detail: `旧 Computer Use provider 分布在 ${parents.size} 个不同的父节点下（${legacy.map((block) => block.id).join(', ')}）；逐个替换会造出重复的 ${CUA_BUNDLE_ID} id，已跳过迁移，请人工确认`,
-    })
-    return lines
-  }
+  // 不再写插件行，所以「目标 id 被占用」「旧行分散在多个父节点」这两类冲突面一起消失了：
+  // 只是删除旧行 + 让 bundle 走 profile 的 bundles 清单，删几段都不会造出重复 id。
   const movable = []
   const preserved = foreignId.map((block) => ({ block, foreignId: true }))
   for (const block of legacy) {
@@ -458,25 +489,20 @@ function migrateComputerUse(lines, changes, warnings) {
   if (movable.length === 0) return lines
   // 按行号从后往前改，前面的行号才不会漂移。
   const operations = [
-    ...movable.map((block, index) => ({ block, replace: index === 0 })),
+    ...movable.map((block) => ({ block })),
     ...registries.map((block) => ({ block, registry: true })),
   ].sort((left, right) => right.block.start - left.block.start)
   let result = lines.slice()
   for (const operation of operations) {
     const block = operation.block
-    const length = block.end - block.start
-    if (operation.replace === true) {
-      result.splice(block.start, length, `${block.indent}- id: ${CUA_BUNDLE_ID}`, `${block.indent}  name: '${CUA_BUNDLE}'`)
-      changes.push({ kind: 'computer-use', detail: `旧 provider ${block.id} → ${CUA_BUNDLE}（bundle 自带 registry 与平台 provider）` })
-    } else if (operation.registry === true) {
-      result.splice(block.start, length)
-      changes.push({ kind: 'computer-use', detail: `删除旧注册表行 ${block.id}（${LEGACY_REGISTRY_NAME}；新 bundle 自带 cua-provider-registry）` })
+    result.splice(block.start, block.end - block.start)
+    if (operation.registry === true) {
+      changes.push({ kind: 'computer-use', detail: '删除旧注册表行 ' + block.id + '（' + LEGACY_REGISTRY_NAME + '；新链自带 cua-provider-registry）' })
     } else {
-      // 同一个 provider 被重复挂了两次（复制粘贴常见）：只留一条，避免一个 profile 里两个 provider 抢注册。
-      result.splice(block.start, length)
-      changes.push({ kind: 'computer-use', detail: `删除重复的旧 provider ${block.id}（一个 profile 只留一条 Computer Use 链）` })
+      changes.push({ kind: 'computer-use', detail: '删除旧 provider ' + block.id + '（Computer Use 链由 ' + CUA_BUNDLE + ' 经 dsh.profile.bundles 引入）' })
     }
   }
+  state.bundleNeeded = true
   return result
 }
 
@@ -639,14 +665,54 @@ export function migratePatchText(text, runtime) {
     current = replaced
   }
 
-  // ── 5. 旧 Computer Use provider → dsh-cua-bundle ─────────────────────────────
-  current = migrateComputerUse(current, changes, warnings)
+  // ── 5. Computer Use：擦掉毒行，旧 provider 只删不写，bundle 走 profile 的 bundles ──
+  const carriers = stripMisusedBundleRows(current, changes)
+  current = carriers.lines
+  const cua = { bundleNeeded: carriers.wantsBundle }
+  current = migrateComputerUse(current, changes, warnings, cua)
 
-  return { text: current.join(crlf ? '\r\n' : '\n'), changes, warnings }
+  return { text: current.join(crlf ? '\r\n' : '\n'), changes, warnings, needsBundle: cua.bundleNeeded }
 }
 
 /**
- * 迁移一个 profile 目录里的 cordis.patch.yml。写盘成功才算变更。
+ * 把 bundle 写进 profile package.json 的 dsh.profile.bundles —— 这是它**唯一**的正确入口。
+ *
+ * 这里可以放心 parse/dump：package.json 是机器写的 JSON，没有需要保留的注释（cordis.patch.yml
+ * 那套「文本锚点」的理由在这里不成立）。读不出、结构不认识就只告警，绝不猜着改。
+ * @returns {boolean} 是否真的改了文件
+ */
+function ensureProfileBundle(profileDirectory, bundle, changes, warnings) {
+  const file = join(profileDirectory, 'package.json')
+  let text
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    warnings.push({ kind: 'computer-use', detail: '读不到 ' + file + '，无法把 ' + bundle + ' 写进 dsh.profile.bundles；Computer Use 需要它才会被载入' })
+    return false
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(text)
+  } catch {
+    warnings.push({ kind: 'computer-use', detail: file + ' 不是合法 JSON，跳过 dsh.profile.bundles 更新' })
+    return false
+  }
+  const profile = manifest !== null && typeof manifest === 'object' ? manifest.dsh?.profile : undefined
+  if (profile === null || typeof profile !== 'object' || Array.isArray(profile)) {
+    warnings.push({ kind: 'computer-use', detail: file + ' 里没有 dsh.profile 段，无法把 ' + bundle + ' 写进 bundles，请手工添加' })
+    return false
+  }
+  const bundles = Array.isArray(profile.bundles) ? profile.bundles : (profile.bundles = [])
+  if (bundles.includes(bundle)) return false
+  bundles.push(bundle)
+  writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n')
+  changes.push({ kind: 'computer-use', detail: bundle + ' 加入 profile 的 dsh.profile.bundles（bundle 只认这个入口）' })
+  return true
+}
+
+/**
+ * 迁移一个 profile 目录：cordis.patch.yml 走文本迁移，package.json 只负责 bundles 清单。
+ * 任一文件写盘成功都算变更。
  * @returns {{file: string, changed: boolean, changes: object[], warnings: object[]}}
  */
 export function migrateProfile(profileDirectory, runtime) {
@@ -658,7 +724,13 @@ export function migrateProfile(profileDirectory, runtime) {
     return { file, changed: false, changes: [], warnings: [] }
   }
   const result = migratePatchText(text, runtime)
-  const changed = result.text !== text
-  if (changed) writeFileSync(file, result.text)
+  let changed = false
+  if (result.text !== text) {
+    writeFileSync(file, result.text)
+    changed = true
+  }
+  if (result.needsBundle === true && ensureProfileBundle(profileDirectory, CUA_BUNDLE, result.changes, result.warnings)) {
+    changed = true
+  }
   return { file, changed, changes: result.changes, warnings: result.warnings }
 }

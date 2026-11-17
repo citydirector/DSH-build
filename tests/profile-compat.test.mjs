@@ -402,50 +402,73 @@ test('dev 运行时下 presentation 换成 executor-ptc', () => {
   assert.match(result.text, /- id: tool-executor-ptc/u)
 })
 
-// ── Computer Use：旧 provider → dsh-cua-bundle ─────────────────────────────────
+// ── Computer Use：旧 provider 只删不写，bundle 走 profile 的 dsh.profile.bundles ──
 //
-// 两条证据：
-//   native —— **真实发行的 desktop profile**（`data/profiles/desktop/cordis.patch.yml` 的 `- insert:` 段，
-//             缩进 4）写着 `- id: computer-use-cua-native` + 旧 native 包名。注意 id 不是包名尾段，
-//             照包名猜会永远匹配不上真实配置。这份证据不在本仓 git 历史里：本仓只发构建脚本。
-//   mcp    —— 上游 39163dd 的 `snapshots/session/computer-use-cua-driver-mcp/cordis.yml:32-33`。
-// 旧配置也可能是用户自己写的，猜错等于擅自换了工具面，所以带自定义 config / 显式停用 / 注释 / 未知键
-// 的一律不碰，只留 warning。迁移的目标是「让默认链干净」，不是「把用户的选择改掉」。
+// 为什么不再写 "- id: cua-bundle" 插件行：那行的 name 指向 @deepseek-ai/dsh-cua-bundle，
+// 而该包的 lib/index.js 全文只有一个 "export {}" —— 它是 bundle 载体，真正的插件行在它自己的
+// cordis.patch.yml 里。把它当插件写时，cordis-plugin-loader 的 _init() 先 unwrapExports 出
+// 一个空命名空间对象，registry.resolve() 既不是函数也没有 apply，抛
+//   invalid plugin, expect function or object with an "apply" method, received object
+// 而 _init() 只 catch import 失败，这条抛错冒泡到 Entry.update()，整次 include apply 失败。
+// 用户看到的是「装 / 更新任何插件都报 apply 失败」，pnpm 那一步却是成功的。
+// 正确入口只有 profile package.json 的 dsh.profile.bundles —— 见 migrateProfile 的测试。
+//
+// 两条证据（旧 provider 行的真实形状）：
+//   native —— 真实发行的 desktop profile（data/profiles/desktop/cordis.patch.yml 的 "- insert:"
+//             段，缩进 4）写着 "- id: computer-use-cua-native" + 旧 native 包名。注意 id 不是包名
+//             尾段，照包名猜会永远匹配不上真实配置。
+//   mcp    —— 上游 39163dd 的 snapshots/session/computer-use-cua-driver-mcp/cordis.yml:32-33。
+// 旧配置也可能是用户自己写的，猜错等于擅自换了工具面，所以带自定义 config / 显式停用 / 注释 /
+// 未知键的一律不碰，只留 warning。
 
 const LEGACY_NATIVE = '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native'
 const LEGACY_MCP = '@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp'
-const MCP_ROW = `- id: computer-use-cua-driver-mcp\n  name: '${LEGACY_MCP}'`
-const REGISTRY_ROW = `- id: computer-use\n  name: '@deepseek-ai/dsh-computer-use'`
+const CUA_BUNDLE_NAME = '@deepseek-ai/dsh-cua-bundle'
+const MCP_ROW = '- id: computer-use-cua-driver-mcp\n  name: \'' + LEGACY_MCP + '\''
+const NATIVE_ROW = '- id: computer-use-cua-native\n  name: \'' + LEGACY_NATIVE + '\''
+const REGISTRY_ROW = '- id: computer-use\n  name: \'@deepseek-ai/dsh-computer-use\''
+const CARRIER_ROW = '- id: cua-bundle\n  name: \'' + CUA_BUNDLE_NAME + '\''
 
 /** 只认这些迁移，别的段落一律原样 —— 所以运行时给一个什么都不认的假实现。 */
 const plainRuntime = () => fakeRuntime({})
 
 const warningText = (result) => result.warnings.map(warning => warning.detail).join('\n')
 const cuaChanges = (result) => result.changes.filter(change => change.kind === 'computer-use')
+/** 配置文本里还有没有把 bundle 当插件写的行。 */
+const carrierRows = (text) => (text.match(/- id: cua-bundle/gu) ?? []).length
 
-test('旧 mcp provider 行被换成 dsh-cua-bundle，且只换一次', () => {
+/** 一个最小 profile 目录：cordis.patch.yml + 可选 package.json。 */
+function tempProfile({ patch, manifest }) {
+  const dir = mkdtempSync(join(tmpdir(), 'profile-cua-'))
+  writeFileSync(join(dir, 'cordis.patch.yml'), patch)
+  if (manifest !== undefined) writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
+  return dir
+}
+
+test('旧 mcp provider 行被删掉，并要求 profile 用 bundles 引入 bundle', () => {
   const source = [
     '- id: agent-default-model',
     "  name: '@deepseek-ai/dsh-agent-default-model'",
     '',
-    '- id: computer-use-cua-driver-mcp',
-    "  name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp'",
+    MCP_ROW,
     '',
     '- id: attachment-local',
     "  name: '@deepseek-ai/dsh-attachment-local'",
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
-  assert.match(result.text, /- id: cua-bundle\n {2}name: '@deepseek-ai\/dsh-cua-bundle'/u)
   assert.equal(result.text.includes(LEGACY_MCP), false)
-  // 上下文没被吃掉：前后两个块还在，空行也还在
+  // 关键：不再写任何插件行 —— 写进去就是毒行
+  assert.equal(carrierRows(result.text), 0)
+  assert.equal(result.text.includes(CUA_BUNDLE_NAME), false)
+  assert.equal(result.needsBundle, true)
+  // 上下文没被吃掉：前后两个块还在
   assert.match(result.text, /- id: agent-default-model/u)
   assert.match(result.text, /- id: attachment-local/u)
   assert.equal(cuaChanges(result).length, 1)
 })
 
-test('真实发行形状：- insert: 下的旧注册表行与 native provider 一起换成一个 bundle', () => {
-  // 与发行 profile 同形：插件行在 `- insert:` 下面缩进 4，注册表与 provider 是同一段里的兄弟项。
+test('真实发行形状：注册表行与 native provider 一起消失，insert 头与注释原样', () => {
   const source = [
     '# 约束：一个组合只允许注册**一个** computer-use 提供方。',
     '- insert:',
@@ -460,23 +483,19 @@ test('真实发行形状：- insert: 下的旧注册表行与 native provider �
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
-  // 恰好一行 bundle，位置与缩进都沿用原来的插件项（4 空格，name 6 空格）
-  assert.equal((result.text.match(/- id: cua-bundle/gu) ?? []).length, 1)
-  assert.match(result.text, /\n {4}- id: cua-bundle\n {6}name: '@deepseek-ai\/dsh-cua-bundle'/u)
-  // 旧两行都消失：provider 被替换，注册表行随删（新 bundle 自带 cua-provider-registry）
+  assert.equal(carrierRows(result.text), 0)
   assert.equal(result.text.includes('computer-use-cua-native'), false)
   assert.equal(result.text.includes('@deepseek-ai/dsh-computer-use\''), false)
   assert.equal(result.text.includes('@deepseek-ai/dsh-experimental-computer-use'), false)
-  // `- insert:` 头、用户注释、别的段都原样
+  assert.equal(result.needsBundle, true)
   assert.equal((result.text.match(/^- insert:/gmu) ?? []).length, 2)
   assert.match(result.text, /^# 约束：一个组合只允许注册/u)
   assert.match(result.text, /- id: browser-use/u)
-  // 两条 change：provider 替换 + 注册表删除
   assert.equal(cuaChanges(result).length, 2)
   assert.match(cuaChanges(result).map(change => change.detail).join('\n'), /旧注册表行 computer-use/u)
 })
 
-test('真实发行形状迁移后再跑一次：原文一字不变、零 change', () => {
+test('真实发行形状迁移后再跑一次：原文一字不变、零 change、不再要 bundles', () => {
   const source = [
     '- insert:',
     '    - id: computer-use',
@@ -489,26 +508,49 @@ test('真实发行形状迁移后再跑一次：原文一字不变、零 change'
   const twice = migratePatchText(once.text, plainRuntime())
   assert.equal(twice.text, once.text)
   assert.equal(cuaChanges(twice).length, 0)
+  assert.equal(twice.needsBundle, false)
 })
 
-test('迁移是幂等的：第二次跑原文不变', () => {
-  const source = `${MCP_ROW}\n`
-  const once = migratePatchText(source, plainRuntime())
-  const twice = migratePatchText(once.text, plainRuntime())
-  assert.equal(twice.text, once.text)
-})
-
-test('已与新链并存时不迁移，只告警（一个 profile 只能挂一条链）', () => {
+test('配置里已经有把 bundle 当插件写的行 → 删除，并声明需要 bundles', () => {
   const source = [
-    '- id: cua-bundle',
-    "  name: '@deepseek-ai/dsh-cua-bundle'",
+    '- insert:',
+    '    ' + CARRIER_ROW.replace('\n', '\n    '),
     '',
-    MCP_ROW,
+    '- insert:',
+    '    - id: browser-use',
+    "      name: '@deepseek-ai/dsh-browser-use'",
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
-  assert.equal(result.text, source)
-  assert.match(warningText(result), /同时存在旧 Computer Use provider/u)
+  assert.equal(carrierRows(result.text), 0)
+  assert.equal(result.text.includes(CUA_BUNDLE_NAME), false)
+  assert.equal(result.needsBundle, true)
+  assert.match(result.text, /- id: browser-use/u)
+  assert.match(cuaChanges(result).map(change => change.detail).join('\n'), /当插件写的行/u)
+})
+
+test('毒行被显式停用：删掉，但不把 bundle 加进 bundles（用户明确不要）', () => {
+  const source = [
+    '- id: cua-bundle',
+    "  name: '@deepseek-ai/dsh-cua-bundle'",
+    '  disabled: true',
+    '',
+  ].join('\n')
+  const result = migratePatchText(source, plainRuntime())
+  assert.equal(result.text.includes('cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
+})
+
+test('毒行块里的注释原样留下（那是用户的心智记录）', () => {
+  const source = [
+    '- id: cua-bundle',
+    '  # 我手动加过 cua，别删这条备注',
+    "  name: '@deepseek-ai/dsh-cua-bundle'",
+    '',
+  ].join('\n')
+  const result = migratePatchText(source, plainRuntime())
+  assert.equal(result.text.includes('我手动加过 cua'), true)
+  assert.equal(result.text.includes(CUA_BUNDLE_NAME), false)
 })
 
 test('旧行被显式停用时整份不动 —— 默认启用不能把用户的关闭动作翻回来', () => {
@@ -520,7 +562,7 @@ test('旧行被显式停用时整份不动 —— 默认启用不能把用户的
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
   assert.match(warningText(result), /显式停用/u)
 })
 
@@ -534,7 +576,7 @@ test('旧行带自定义 config 时不动（无法证明等价）', () => {
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
   assert.match(warningText(result), /自定义 config/u)
 })
 
@@ -547,7 +589,7 @@ test('旧行带未知键（priority 等）时不动', () => {
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
   assert.match(warningText(result), /含非发行键/u)
 })
 
@@ -555,54 +597,53 @@ test('native 的 id 按包名尾段猜（不是发行 id）→ 只诊断，不�
   const source = [
     '- insert:',
     '    - id: computer-use-cua-driver-native',
-    `      name: '${LEGACY_NATIVE}'`,
+    '      ' + NATIVE_ROW.replace('\n', '\n      '),
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
   assert.match(warningText(result), /id 不是发行 id/u)
 })
 
 test('旧注册表行在别的段里 → 保留原文并告警，不猜着删', () => {
   const source = [
     '- insert:',
-    `    ${REGISTRY_ROW.replace('\n', '\n    ').replace('  name', '      name')}`,
+    '    ' + REGISTRY_ROW.replace('\n', '\n    '),
     '',
     '- insert:',
-    '    - id: computer-use-cua-native',
-    `      name: '${LEGACY_NATIVE}'`,
+    '    ' + NATIVE_ROW.replace('\n', '\n    '),
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
+  assert.equal(result.needsBundle, false)
   assert.match(warningText(result), /旧注册表行 computer-use/u)
 })
 
-test('同一个 mcp 行被重复挂了两次 → 只留一条 cua-bundle', () => {
+test('同一个 mcp 行被重复挂了两次 → 两行都删，不留插件行', () => {
   const source = [MCP_ROW, '', MCP_ROW, ''].join('\n')
   const result = migratePatchText(source, plainRuntime())
-  assert.equal((result.text.match(/- id: cua-bundle/gu) ?? []).length, 1)
   assert.equal(result.text.includes(LEGACY_MCP), false)
+  assert.equal(carrierRows(result.text), 0)
+  assert.equal(result.needsBundle, true)
   assert.equal(cuaChanges(result).length, 2)
 })
 
-test('旧行分散在两个 insert 段里 → 不迁移，避免两条同 id 的 bundle', () => {
+test('旧行分散在两个 insert 段里 → 两行都删（不再写插件行，也就没有同 id 冲突）', () => {
   const source = [
     '- insert:',
-    '    - id: computer-use-cua-native',
-    `      name: '${LEGACY_NATIVE}'`,
+    '    ' + NATIVE_ROW.replace('\n', '\n    '),
     '',
     '- insert:',
-    '    - id: computer-use-cua-driver-mcp',
-    `      name: '${LEGACY_MCP}'`,
+    '    ' + MCP_ROW.replace('\n', '\n    '),
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
-  assert.equal(result.text, source)
-  assert.equal(result.text.includes('dsh-cua-bundle'), false)
-  assert.match(warningText(result), /不同的父节点/u)
+  assert.equal(result.text.includes(LEGACY_NATIVE), false)
+  assert.equal(result.text.includes(LEGACY_MCP), false)
+  assert.equal(carrierRows(result.text), 0)
+  assert.equal(result.needsBundle, true)
 })
 
 test('跟 Computer Use 无关的配置一个字都不动', () => {
@@ -617,9 +658,10 @@ test('跟 Computer Use 无关的配置一个字都不动', () => {
   const result = migratePatchText(source, plainRuntime())
   assert.equal(result.text, source)
   assert.equal(result.changes.length, 0)
+  assert.equal(result.needsBundle, false)
 })
 
-test('目标 id cua-bundle 已被别的插件占用 → 不迁移，避免写出重复 id', () => {
+test('配置里已有 id: cua-bundle（name 不是 bundle）→ 旧行照样删，bundle 仍走 bundles 清单', () => {
   const source = [
     '- id: cua-bundle',
     "  name: 'some-other-plugin'",
@@ -628,10 +670,64 @@ test('目标 id cua-bundle 已被别的插件占用 → 不迁移，避免写出
     '',
   ].join('\n')
   const result = migratePatchText(source, plainRuntime())
+  // some-other-plugin 不是 bundle 载体，5a 不碰它；旧 provider 行被删
+  assert.equal(result.text.includes(LEGACY_MCP), false)
   assert.equal(result.text.match(/- id: cua-bundle/gu).length, 1)
-  assert.equal(result.text.includes(LEGACY_MCP), true)
-  assert.match(warningText(result), /再迁一条会造出重复 id/u)
+  assert.equal(result.needsBundle, true)
 })
+
+test('migrateProfile：删掉旧链后把 bundle 写进 package.json 的 dsh.profile.bundles', () => {
+  const dir = tempProfile({
+    patch: [MCP_ROW, ''].join('\n'),
+    manifest: { name: 'p', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'], patchReload: 'live' } } },
+  })
+  const result = migrateProfile(dir, plainRuntime())
+  assert.equal(result.changed, true)
+  const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', CUA_BUNDLE_NAME])
+  assert.equal(manifest.dsh.profile.patchReload, 'live')
+  const patch = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
+  assert.equal(patch.includes(LEGACY_MCP), false)
+  assert.equal(carrierRows(patch), 0)
+})
+
+test('migrateProfile：bundle 已在 bundles 里时第二次什么都不写', () => {
+  const dir = tempProfile({
+    patch: [MCP_ROW, ''].join('\n'),
+    manifest: { name: 'p', dsh: { profile: { bundles: [CUA_BUNDLE_NAME] } } },
+  })
+  const first = migrateProfile(dir, plainRuntime())
+  assert.equal(first.changed, true)
+  const second = migrateProfile(dir, plainRuntime())
+  assert.equal(second.changed, false)
+  assert.deepEqual(second.changes, [])
+})
+
+test('migrateProfile：现场快照（毒行 + bundles 已含该包）→ 只删行，不动 package.json', () => {
+  const dir = tempProfile({
+    patch: ['- insert:', '    - id: cua-bundle', "      name: '@deepseek-ai/dsh-cua-bundle'", ''].join('\n'),
+    manifest: { name: 'p', dsh: { profile: { bundles: [CUA_BUNDLE_NAME] } } },
+  })
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const result = migrateProfile(dir, plainRuntime())
+  assert.equal(result.changed, true)
+  assert.equal(readFileSync(join(dir, 'cordis.patch.yml'), 'utf8').includes(CUA_BUNDLE_NAME), false)
+  assert.equal(readFileSync(join(dir, 'package.json'), 'utf8'), before)
+})
+
+test('migrateProfile：package.json 读不动时只告警，patch.yml 照样修好', () => {
+  const dir = tempProfile({ patch: [MCP_ROW, ''].join('\n') })
+  const result = migrateProfile(dir, plainRuntime())
+  assert.equal(result.changed, true)
+  assert.equal(readFileSync(join(dir, 'cordis.patch.yml'), 'utf8').includes(LEGACY_MCP), false)
+  assert.match(warningText(result), /无法把 .* 写进 dsh\.profile\.bundles/u)
+})
+
+test('migrateProfile：package.json 没有 dsh.profile 段时告警，不硬造结构', () => {
+  const dir = tempProfile({ patch: [MCP_ROW, ''].join('\n'), manifest: { name: 'p' } })
+  migrateProfile(dir, plainRuntime())
+  assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dsh, undefined)
+});
 
 // ── list-agents：真实 profile 的插件行在 `- insert:` 下（缩进 14） ───────────────
 // 发行 profile 的 tool-subagent-control 缩进就是 14；这两条用工整的嵌套形状确认
