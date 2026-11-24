@@ -40,6 +40,7 @@
 | 便携版 `dsh plugin` 可用 | 上游 CLI 要求 PATH 上有 pnpm，便携版只带 node，所以 `dsh plugin` 一直报 "pnpm was not found"。现在随包带 pnpm（与上游同版本） | 🟢 | `dsh-plugin-cli.mjs` · `assemble-runtime.ps1` |
 | 不再提示 pnpm 可升级 | 随包 pnpm 自带的 update-notifier 会在 `install` / `add` 后联网比对并提示升级，但随包版本跟上游钉死、不该被单方面顶掉（`12.x` 在工作区里跑 `pnpm run` 会失败）。两条 pnpm 入口——便携版 `dsh plugin` 与桌面端插件面板——都用 `PNPM_CONFIG_UPDATE_NOTIFIER=false` 关掉 | 🟢🔵 | `dsh-plugin-cli.mjs` · `patch-desktop-pnpm-notifier.mjs`（源码） |
 | 会话格式自动迁移 v2/v3 → v4 | 把上游迁移脚本打成单文件随包分发，每个版本首次启动跑一次；已全部是 v4 时毫秒级跳过 | 🟢🔵 | `build-migrator.mjs` · `dsh-launcher.cs` |
+| 桌面版独立 Node 跟随构建 | 上游把 `primary-runtime` 里的独立 Node（`load_workspace_dependencies` 交给 agent 的那份，以及插件子进程经 `BILLION_CONTEXT_NODE` 用的那份）钉在 24.22.3。现在它跟随构建所用的 Node——CI 里就是 `engines.node` 选出的主线，现为 26——哈希取自该版本官方 `SHASUMS256.txt`，只升不降。桌面宿主和插件本身仍跑在 Electron 自带的 Node 上（Electron 44 为 24.22.3），那一层跟着上游的 Electron 走 | 🔵 | `patch-desktop-node-runtime.mjs`（源码） |
 
 ### 3. 官方功能补全（随包发行）
 
@@ -76,7 +77,7 @@
 
 ```mermaid
 flowchart LR
-  U[上游源码] --> S[源码补丁<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl]
+  U[上游源码] --> S[源码补丁<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl<br/>node-runtime]
   S --> B[build:official]
   B --> L[产物补丁<br/>native-code / tool-schema<br/>session-lock]
   L --> M[迁移器 + plugin-refresh]
@@ -110,7 +111,7 @@ flowchart LR
 dsh-portable/
 ├── dsh.exe        # 启动器：DSH_HOME=data，首启迁移会话；`dsh plugin …` 走随包 pnpm
 ├── update.exe     # 更新器：原地更新 + 插件刷新
-├── node/          # Node.js 运行时
+├── node/          # Node.js 运行时（跟随上游 engines.node 的最高主线，现为 26）
 ├── app/           # dsh 本体与依赖；vendor/pnpm、plugin-refresh.mjs
 ├── data/          # 用户数据（更新时保留）
 ├── VERSION        # 上游 commit sha
@@ -156,6 +157,7 @@ dsh-portable/
 - 晋升：把 `dev` 合进 `main`。同一通道的构建会排队串行，不会互相删 release。
 - 流水线 `.github/workflows/build-harness.yml`：`check` → `npm` / `portable` / `desktop` → `release` → `notify-failure`。workflow 只做编排，逻辑在 `ci/` 下，可以本地单独跑。
 - pnpm 版本不手写：`ci/align-package-manager.mjs` 读上游根 `package.json` 的 `devDependencies.pnpm`（桌面版 `primary-runtime` 里的 pnpm 正是从这份拷进去的，所以构建用的 pnpm 恒等于随包那份），校验禁区后经 `$GITHUB_OUTPUT` 交给 `pnpm/action-setup`。禁区：`<11.7.1` 有 hoisted 缺陷（[pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)），`12.x` 在工作区跑 `pnpm run` 会失败。只有紧急钉版时才设 `PNPM_VERSION` 覆盖（脚本会警告：那会让构建用的 pnpm 与随包的不同版本）。
+- Node 版本同样不手写：`ci/align-node.mjs` 从上游根 `package.json` 的 `engines.node` 里选主版本最高的那一支（上游 0.2.3-alpha.2 起是 `^24.22.3 || >=26.13.1`，所以选 26），`actions/setup-node` 用 `check-latest` 装该主线的最新补丁版，装完再用同一判据 `--assert` 复核；便携冒烟还会用随包的 `node.exe` 再复核一次。便携版随包的 `node.exe` 就是 CI 装的这一份，`patch-desktop-node-runtime.mjs` 也把桌面版 `primary-runtime` 的 Node 换成同一版本。紧急时可设 `NODE_VERSION`（主版本号或完整版本号），但它仍必须落在上游 `engines.node` 之内。
 - 手动触发：Actions → **Build DSH** → `Run workflow`，`channel` 选 `auto` / `main` / `dev`。
 - ⚠️ 别把 pin 退回 0.1.7 之前：那些版本没有 v3/v4 会话编解码。
 

@@ -53,6 +53,13 @@ env:
   # 三个 job 都在 checkout 后跑它对齐 packageManager（否则 pnpm 自动回退上游钉的那个版本），
   # 且每次 pnpm 调用带 --pm-on-fail=ignore（防它把 packageManagerDependencies 写进锁文件）。
   PNPM_VERSION: ""
+  # Node 主线同样不手写：`ci/align-node.mjs` 从上游根 package.json 的 engines.node 里选主版本最高的
+  # 那一支（0.2.3-alpha.2 起为 `^24.22.3 || >=26.13.1` → 26），setup-node 再 check-latest 取该主线的
+  # 最新补丁版，装完用同一判据 --assert 复核。便携版随包的 node.exe 就是这一份（stamp.ps1 拷它），
+  # 所以这里装什么，用户手上就是什么。从前写死 "24" 且不 check-latest，setup-node 会直接用 runner
+  # 缓存里的旧补丁版 —— 上游收紧 engines 后能过纯属缓存恰好够新。
+  # 留空 = 跟随上游；紧急钉版时填主版本号（如 24）或完整版本号，但仍必须落在上游 engines 里。
+  NODE_VERSION: ""
 
 jobs:
   # -------- 解析目标上游提交 + 跳过判定 --------
@@ -116,11 +123,17 @@ jobs:
           repository: citydirector/DSH-build
           ref: ${{ github.sha }}
           path: _build_repo
-      # 本仓脚本声明 engines node>=24（cua-helper.mjs 用 Node 24 的 API），runner 自带的 node
-      # 版本会随镜像漂移，所以这里显式钉 24，与 npm/portable/desktop 三个 job 保持一致。
+      # 本仓脚本需要 Node >= 24（cua-helper.mjs 用 Node 24 的 API），runner 自带的 node 随镜像漂移，
+      # 所以显式装；主线与 npm/portable/desktop 三个 job 同源（见顶层 env 的 NODE_VERSION 注释）。
+      - name: Pick the Node.js line from upstream engines
+        id: align-node
+        run: node _build_repo/ci/align-node.mjs
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ steps.align-node.outputs.node_version }}
+          check-latest: true
+      - name: Assert Node.js matches upstream engines
+        run: node _build_repo/ci/align-node.mjs --assert
       # locked restore → Protocol.Tests → win-x64 self-contained publish → cua-helper.json → 自校验
       - name: Build the win-x64 helper and verify the payload
         run: _build_repo/ci/portable/build-cua-helper.ps1 -Root . -Commit ${{ needs.check.outputs.sha }}
@@ -156,15 +169,21 @@ jobs:
       - name: Align packageManager pin with the pnpm we run
         id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
+      - name: Pick the Node.js line from upstream engines
+        id: align-node
+        run: node _build_repo/ci/align-node.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ steps.align-node.outputs.node_version }}
+          check-latest: true
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version && node --version
+      - name: Assert Node.js matches upstream engines
+        run: node _build_repo/ci/align-node.mjs --assert
       # helper 在 npm tarball 里也必须完整：cua-windows 的 files 含 native/bin，而安装态 provider
       # 只 access() 这个目录（不编译）。stage 校验失败就直接失败，不产出「看起来打得出来」的半成品。
       - uses: actions/download-artifact@v8
@@ -228,15 +247,21 @@ jobs:
       - name: Align packageManager pin with the pnpm we run
         id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
+      - name: Pick the Node.js line from upstream engines
+        id: align-node
+        run: node _build_repo/ci/align-node.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ steps.align-node.outputs.node_version }}
+          check-latest: true
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version; node --version
+      - name: Assert Node.js matches upstream engines
+        run: node _build_repo/ci/align-node.mjs --assert
       # 全部补丁单测（独立 fixtures，不依赖上游构建产物，因此放在 install 之前）。
       # 必须在构建（install / build:official）之前跑：摘要与审计用例需要一份 pin 原始形状的上游树，
       # 通过 UI_LOCATE_UPSTREAM 指过去；缺树时那组用例会跳过（= 假绿），所以这一步必须先于构建。
@@ -343,15 +368,21 @@ jobs:
       - name: Align packageManager pin with the pnpm we run
         id: align-pnpm
         run: node _build_repo/ci/align-package-manager.mjs
+      - name: Pick the Node.js line from upstream engines
+        id: align-node
+        run: node _build_repo/ci/align-node.mjs
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ steps.align-pnpm.outputs.pnpm_version }}
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ steps.align-node.outputs.node_version }}
+          check-latest: true
           cache: pnpm
       - name: Show toolchain versions
         run: pnpm --version; node --version
+      - name: Assert Node.js matches upstream engines
+        run: node _build_repo/ci/align-node.mjs --assert
       # 与 portable 同理：测试在 install 之前跑（夹具自带依赖，零 npm 依赖）。
       # DSH_DESKTOP_SOURCE 让 ACL 控制台补丁的测试连上游源码那半一起跑（否则静默跳过）；
       # UI_LOCATE_UPSTREAM 让审计用例拿到 pin 原始形状的上游树（否则跳过 = 假绿）。

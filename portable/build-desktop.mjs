@@ -172,6 +172,9 @@ function main() {
   // 随包 pnpm 的 update-notifier 会拿 npm 的 latest（12.x）比版本，用户每次 dsh plugin add 都看到
   // 「可升级」；我们钉 11.x 且不能升，索性关掉提示（两处 packageManager.env 都要加）。
   run('patch', process.execPath, [join(HERE, 'patch-desktop-pnpm-notifier.mjs'), SOURCE])
+  // primary-runtime 里给 agent 工作区依赖与插件子进程用的独立 Node 跟随构建用 Node（CI 里 = engines
+  // 最高主线，现 26）。宿主与插件本身仍跑在 Electron 自带的 Node 上，那一层跟上游的 Electron 走。
+  run('patch', process.execPath, [join(HERE, 'patch-desktop-node-runtime.mjs'), SOURCE])
   // AclSandbox 用 creationFlags 0 起受限子进程，于是子进程挂在**跑 runner 的那个进程**的控制台上；
   // Electron 是 GUI 子系统、永远不持有控制台 → 桌面端每条受限命令都在 DLL 初始化阶段以 0xC0000142
   // 静默死亡。修在源码阶段，由 build:official 编译进产物。

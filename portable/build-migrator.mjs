@@ -117,8 +117,11 @@ await esbuild.build({
   bundle: true,
   platform: 'node',
   format: 'esm',
-  // 便携包随包的是 node.exe 24（见 workflow 的 Copy node runtime）。目标定在 24 才能用
-  // import.meta.dirname/filename —— 上游脚本的 main-guard 依赖它们。
+  // 产物在两种 Node 上跑：便携包是随包的 node.exe（ci/align-node.mjs 从上游 engines 选的主线，现为 26）；
+  // 桌面包是 Electron 自己（dsh-portable-bootstrap.ts 的 migrateSessionsOnce 以 ELECTRON_RUN_AS_NODE
+  // 起 process.execPath），Node 版本跟着上游的 Electron 走。target 只决定语法降级，所以不跟着便携版
+  // 抬到 26，留在 24：既能用 import.meta.dirname/filename（上游脚本的 main-guard 依赖它们），
+  // 又不会产出较老内置 Node 解析不了的语法。
   target: 'node24',
   // packages:'external' + 明确禁止读 tsconfig：上游根 tsconfig.json 把 @deepseek-ai/* 用
   // `paths` 映射到 packages/** 源码，esbuild 会先按 paths 把它们解析成文件路径，于是

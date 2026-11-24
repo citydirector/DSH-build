@@ -2,6 +2,13 @@
 # --dump-default-config 更严格，能捕获 deploy 漏掉的 registry 依赖（如 cordis-plugin-hmr 的
 # @babel/code-frame）。失败时把 stdout+stderr 合并进 _smoke.log，供 artifact 上传与失败通知读取。
 $ErrorActionPreference = 'Stop'
+
+# 随包 node.exe 必须就是 align-node 选定的那条主线、且不低于上游 engines.node 的下限：
+# stamp.ps1 拷的是 PATH 上的 node，这里用包里那份亲自复核一次，防止拷错 / setup-node 没按预期装。
+$bundledNode = (& portable\node\node.exe --version)
+& portable\node\node.exe _build_repo\ci\align-node.mjs --assert
+if ($LASTEXITCODE -ne 0) { throw "随包 node.exe $bundledNode 不满足上游 engines.node（align-node --assert 退出码 $LASTEXITCODE）" }
+
 $env:DSH_HOME = Join-Path (Get-Location) "portable\data"
 $env:PATH = (Join-Path (Get-Location) "portable\node") + ";" + $env:PATH
 $outLog = "_smoke.log"

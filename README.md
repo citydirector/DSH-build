@@ -40,6 +40,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 | `dsh plugin` works in portable | Upstream's CLI expects pnpm on PATH; the portable package only had node, so `dsh plugin` always failed with "pnpm was not found". It now ships pnpm (upstream's version) | 🟢 | `dsh-plugin-cli.mjs` · `assemble-runtime.ps1` |
 | No "new version available" nag from pnpm | The bundled pnpm's update-notifier phones home after `install` / `add` and suggests upgrading, but the shipped version is pinned to upstream and must not be bumped on its own (`12.x` fails `pnpm run` inside the workspace). Both pnpm entry points — portable `dsh plugin` and the desktop plugin panel — set `PNPM_CONFIG_UPDATE_NOTIFIER=false` | 🟢🔵 | `dsh-plugin-cli.mjs` · `patch-desktop-pnpm-notifier.mjs` (source) |
 | Session migration v2/v3 → v4 | Upstream's migrator bundled into one file, run once per version on first start; skipped in milliseconds when everything is already v4 | 🟢🔵 | `build-migrator.mjs` · `dsh-launcher.cs` |
+| Desktop's standalone Node follows the build | Upstream pins `primary-runtime`'s standalone Node (the one `load_workspace_dependencies` hands to the agent, and the one plugin child processes get via `BILLION_CONTEXT_NODE`) at 24.22.3. It now follows the Node the build ran on — CI's `engines.node` line, currently 26 — with hashes taken from that release's official `SHASUMS256.txt`; it only ever upgrades. The desktop host and plugins themselves still run on Electron's built-in Node (24.22.3 in Electron 44), which follows upstream's Electron | 🔵 | `patch-desktop-node-runtime.mjs` (source) |
 
 ### 3. Official features, bundled
 
@@ -76,7 +77,7 @@ Upstream ships installers, writes to the user profile, and has a few problems th
 
 ```mermaid
 flowchart LR
-  U[Upstream source] --> S[Source patches<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl]
+  U[Upstream source] --> S[Source patches<br/>portable / update / toolchain<br/>runtime-patch / computer-use<br/>browser-use / guest-devtools<br/>pnpm-notifier / acl<br/>node-runtime]
   S --> B[build:official]
   B --> L[Built patches<br/>native-code / tool-schema<br/>session-lock]
   L --> M[Migrator + plugin-refresh]
@@ -110,7 +111,7 @@ Details (manifest-driven updates, static checks) are in [portable/README-desktop
 dsh-portable/
 ├── dsh.exe        # launcher: DSH_HOME=data, migrates sessions; `dsh plugin …` uses bundled pnpm
 ├── update.exe     # updater: in-place update + plugin refresh
-├── node/          # Node.js runtime
+├── node/          # Node.js runtime (highest major line in upstream engines.node, currently 26)
 ├── app/           # dsh and its deps; vendor/pnpm, plugin-refresh.mjs
 ├── data/          # your data (kept across updates)
 ├── VERSION        # upstream commit sha
@@ -156,6 +157,7 @@ Close dsh, then run `update.exe`:
 - Promote by merging `dev` into `main`. Builds on one channel queue, so they never delete each other's release.
 - Pipeline `.github/workflows/build-harness.yml`: `check` → `npm` / `portable` / `desktop` → `release` → `notify-failure`. The workflow only orchestrates; the logic lives in `ci/` and runs locally too.
 - pnpm is not pinned by hand: `ci/align-package-manager.mjs` reads the upstream root `package.json`'s `devDependencies.pnpm` (Desktop's `primary-runtime` pnpm is copied from exactly that entry, so the build-time pnpm equals the shipped one), checks it against the forbidden range, and passes it to `pnpm/action-setup` through `$GITHUB_OUTPUT`. Forbidden: `<11.7.1` (hoisting bug, [pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)) and `12.x` (fails `pnpm run` inside the workspace). Set `PNPM_VERSION` only to pin in an emergency — the script then warns that the build-time pnpm differs from the shipped one.
+- Node is not pinned by hand either: `ci/align-node.mjs` picks the branch of the upstream root `package.json`'s `engines.node` with the highest major (`^24.22.3 || >=26.13.1` since upstream 0.2.3-alpha.2, so 26), `actions/setup-node` installs that line's latest patch with `check-latest`, and the same rule re-checks the result with `--assert`; the portable smoke test checks the bundled `node.exe` once more. The portable package ships exactly the Node that CI installed, and `patch-desktop-node-runtime.mjs` points Desktop's `primary-runtime` Node at the same version. Set `NODE_VERSION` (a major or a full version) only in an emergency; it must still satisfy upstream's `engines.node`.
 - Manual run: Actions → **Build DSH** → `Run workflow`, `channel` = `auto` / `main` / `dev`.
 - ⚠️ Don't pin anything older than 0.1.7: those versions have no v3/v4 session codecs.
 
